@@ -125,10 +125,10 @@ describe("burndown row", () => {
 
   test("fits exact visible width and emits no line when no signal fits", () => {
     const value = segment("Claude", "ahead", 0.12, { resetsAt: now + 2 * 60 * 60 * 1000 });
-    const fits = renderBurndownRow([value], 12, { now, theme: identityTheme });
+    const fits = renderBurndownRow([value], 13, { now, theme: identityTheme });
     expect(fits).toEqual(["Provider ▲12"]);
     expect(visibleWidth(fits[0] ?? "")).toBeLessThanOrEqual(12);
-    expect(renderBurndownRow([value], 11, { now })).toEqual([]);
+    expect(renderBurndownRow([value], 12, { now })).toEqual([]);
   });
 
   test("prefers full quota detail on ~52-col panes and reflows on resize", () => {
@@ -472,6 +472,6 @@ describe("burndown row", () => {
     });
     const lines = renderBurndownRow([value], 10, { now, theme: identityTheme, layout: "wrap" });
     expect(lines).toEqual(["Alpha ▲12"]);
-    expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(10);
+    expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(9);
   });
 });

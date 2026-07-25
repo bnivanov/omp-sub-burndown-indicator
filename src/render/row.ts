@@ -351,8 +351,9 @@ export function renderBurndownRow(
 ): readonly string[] {
   const options: BurndownRenderOptions =
     "fg" in optionsOrTheme ? { theme: optionsOrTheme } : optionsOrTheme;
-  // Pack against the host-supplied width.
-  const budget = Math.max(0, Math.floor(width));
+  // Host chrome (herdr/OMP borders) can paint one cell tighter than the width
+  // passed to render(); keep a 1-cell margin so lines are not mid-wrapped.
+  const budget = Math.max(0, Math.floor(width) - 1);
   if (budget <= 0 || segments.length === 0) return EMPTY_ROWS;
   const symbols =
     typeof options.symbols === "object" ? options.symbols : symbolsFor(options.symbols ?? "auto");
