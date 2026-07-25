@@ -323,5 +323,3 @@ export function normalizeUsageReports(
 
   return { snapshots: [...snapshotsById.values()], diagnostics };
 }
-
-export const normalizeReports = normalizeUsageReports;

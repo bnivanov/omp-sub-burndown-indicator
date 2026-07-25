@@ -1,5 +1,5 @@
-import type { BurndownSegment, SegmentState } from "../domain/types";
 import type { DensityMode } from "../config";
+import type { BurndownSegment, SegmentState } from "../domain/types";
 
 export type { DensityMode } from "../config";
 
@@ -77,14 +77,6 @@ export function segmentSignalWithDensity(
   return density === "dense" ? `${signal}pp` : `${signal} points`;
 }
 
-/** Add the fully spelled-out pace-point unit while preserving state glyphs. */
-export function segmentSignalWithUnit(
-  segment: Pick<BurndownSegment, "state" | "paceDelta" | "stale">,
-  symbols: BurndownSymbols,
-): string {
-  return segmentSignalWithDensity(segment, symbols, "text");
-}
-
 /** Spell out what a pace delta means for the full-width indicator form. */
 export function describeSegmentSignal(
   segment: Pick<BurndownSegment, "state" | "paceDelta" | "stale">,
@@ -109,5 +101,3 @@ export function describeSegmentSignal(
             : "unknown";
   return `${signal} ${meaning}${segment.stale ? " (stale)" : ""}`;
 }
-
-export const getSymbols = symbolsFor;

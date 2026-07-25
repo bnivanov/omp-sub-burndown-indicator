@@ -10,6 +10,7 @@ const PROVIDER_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   llamacpp: "llama.cpp",
   "openai-codex": "OpenAI Codex",
   "opencode-go": "OpenCode Go",
+  "xai-oauth": "Xai Oauth",
   zai: "Z.ai",
 };
 
@@ -99,9 +100,6 @@ export function buildStableLabels(segments: readonly LabelSegment[]): StableLabe
   }
   return { full, providerFull, accountRequired };
 }
-
-/** Alias retained as the natural imperative name for callers. */
-export const assignStableLabels = buildStableLabels;
 
 export function labelFor(labels: StableLabels, subscriptionId: string): string {
   return labels.full.get(subscriptionId) ?? "?";

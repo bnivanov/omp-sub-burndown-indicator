@@ -29,6 +29,10 @@ describe("readConfig", () => {
     expect(readConfig({}, {}).layout).toBe("fit");
     expect(readConfig({}, { layout: "wrap" }).layout).toBe("wrap");
     expect(() => readConfig({}, { layout: "wide" })).toThrow("layout must be fit or wrap");
+    expect(readConfig({}).windowView).toBe("five_hour");
+    expect(readConfig({}, { windowView: "all" }).windowView).toBe("all");
+    expect(readConfig({}, { windowView: "month" }).windowView).toBe("month");
+    expect(() => readConfig({}, { windowView: "hourly" })).toThrow("windowView");
   });
 });
 

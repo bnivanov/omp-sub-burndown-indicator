@@ -7,7 +7,7 @@ import {
   describeSegmentSignal,
   type SymbolMode,
   segmentSignal,
-  segmentSignalWithUnit,
+  segmentSignalWithDensity,
   symbolsFor,
 } from "./symbols";
 
@@ -57,28 +57,98 @@ function riskRank(state: SegmentState, stale: boolean): number {
   return 4;
 }
 
+function windowClassRank(segment: BurndownSegment): number {
+  if (segment.windowClass === "five_hour") return 0;
+  if (segment.windowClass === "week") return 1;
+  if (segment.windowClass === "month") return 2;
+  if (segment.windowClass === "other") return 3;
+  return 4;
+}
+
+function accountGroupKey(segment: BurndownSegment): string {
+  return segment.accountId ?? segment.subscriptionId;
+}
+
+function segmentRiskScore(segment: BurndownSegment): {
+  rank: number;
+  pace: number;
+  subscriptionId: string;
+} {
+  return {
+    rank: riskRank(segment.state, segment.stale),
+    pace:
+      (segment.state === "behind" || segment.state === "ahead") && !segment.stale
+        ? Number.isFinite(segment.paceDelta)
+          ? (segment.paceDelta ?? 0)
+          : 0
+        : 0,
+    subscriptionId: segment.subscriptionId,
+  };
+}
+
+function compareRisk(a: BurndownSegment, b: BurndownSegment): number {
+  const left = segmentRiskScore(a);
+  const right = segmentRiskScore(b);
+  if (left.rank !== right.rank) return left.rank - right.rank;
+  if (
+    (a.state === "behind" || a.state === "ahead") &&
+    (b.state === "behind" || b.state === "ahead") &&
+    !a.stale &&
+    !b.stale &&
+    left.pace !== right.pace
+  ) {
+    return left.pace - right.pace;
+  }
+  return left.subscriptionId.localeCompare(right.subscriptionId);
+}
+
+/**
+ * Sort by account-group risk (worst segment in the group), keep an account's
+ * windows contiguous, and order windows canonically: 5h → Wk → Mo → other.
+ */
 export function sortBurndownSegments(segments: readonly BurndownSegment[]): BurndownSegment[] {
-  return [...segments].sort((a, b) => {
-    const rank = riskRank(a.state, a.stale) - riskRank(b.state, b.stale);
-    if (rank !== 0) return rank;
-    if ((a.state === "behind" || a.state === "ahead") && !a.stale && !b.stale) {
-      const ap = Number.isFinite(a.paceDelta) ? (a.paceDelta ?? 0) : 0;
-      const bp = Number.isFinite(b.paceDelta) ? (b.paceDelta ?? 0) : 0;
-      if (ap !== bp) return ap - bp;
-    }
-    return a.subscriptionId.localeCompare(b.subscriptionId);
+  const groups = new Map<string, BurndownSegment[]>();
+  for (const segment of segments) {
+    const key = accountGroupKey(segment);
+    const group = groups.get(key);
+    if (group) group.push(segment);
+    else groups.set(key, [segment]);
+  }
+
+  const orderedGroups = [...groups.entries()].sort(([, leftSegments], [, rightSegments]) => {
+    const leftWorst = [...leftSegments].sort(compareRisk)[0];
+    const rightWorst = [...rightSegments].sort(compareRisk)[0];
+    if (!leftWorst || !rightWorst) return 0;
+    return compareRisk(leftWorst, rightWorst);
   });
+
+  const ordered: BurndownSegment[] = [];
+  for (const [, group] of orderedGroups) {
+    group.sort((a, b) => {
+      const byClass = windowClassRank(a) - windowClassRank(b);
+      if (byClass !== 0) return byClass;
+      return (a.windowLabel ?? a.windowId ?? "").localeCompare(b.windowLabel ?? b.windowId ?? "");
+    });
+    ordered.push(...group);
+  }
+  return ordered;
 }
 
 function stableSegmentKey(segments: readonly BurndownSegment[]): string {
   return JSON.stringify(
     [...segments]
-      .sort((a, b) => a.subscriptionId.localeCompare(b.subscriptionId))
+      .sort((a, b) => {
+        const bySubscription = a.subscriptionId.localeCompare(b.subscriptionId);
+        if (bySubscription !== 0) return bySubscription;
+        return (a.windowLabel ?? a.windowId ?? "").localeCompare(b.windowLabel ?? b.windowId ?? "");
+      })
       .map((segment) => [
         segment.subscriptionId,
         segment.provider,
         segment.label,
         segment.windowId,
+        segment.windowClass,
+        segment.windowLabel,
         segment.resetsAt,
         segment.usedFraction,
         segment.elapsedFraction,
@@ -123,9 +193,19 @@ function formsFor(
   theme: BurndownTheme | undefined,
 ): RenderedForms {
   const color = colorFor(segment);
-  const fullSignal = style(theme, color, describeSegmentSignal(segment, symbols, density));
-  const compactSignal = style(theme, color, segmentSignalWithUnit(segment, symbols));
-  const minimalSignal = style(theme, color, segmentSignal(segment, symbols));
+  const remaining = remainingQuota(segment.usedFraction);
+  const reset = showReset ? resetCountdown(segment.resetsAt, now) : "";
+  const details = [remaining, reset].filter(Boolean);
+  // Resetless fresh rows with % left omit the hollow "? unknown" pace glyph;
+  // stale rows keep it so the stale marker stays visible.
+  const omitPaceGlyph = segment.state === "unknown" && !segment.stale && details.length > 0;
+  const fullSignal = omitPaceGlyph
+    ? ""
+    : style(theme, color, describeSegmentSignal(segment, symbols, density));
+  const compactSignal = omitPaceGlyph
+    ? ""
+    : style(theme, color, segmentSignalWithDensity(segment, symbols, density));
+  const minimalSignal = omitPaceGlyph ? "" : style(theme, color, segmentSignal(segment, symbols));
   const separator = " ";
   const provider = providerLabelFor(labels, segment.subscriptionId);
   const account = labelFor(labels, segment.subscriptionId);
@@ -133,21 +213,81 @@ function formsFor(
     labels.accountRequired.has(segment.subscriptionId) &&
     segment.label.trim().length > 0 &&
     segment.label.trim().toLocaleLowerCase() !== segment.provider.trim().toLocaleLowerCase();
-  const qualifiedLabel = hasDistinctAccount ? `${provider}:${account}` : provider;
+  const windowSuffix = segment.windowLabel?.trim();
+  const branded = windowSuffix ? `${provider} ${windowSuffix}` : provider;
+  const qualifiedLabel = hasDistinctAccount ? `${branded}:${account}` : branded;
   const fullLabel = style(theme, "muted", qualifiedLabel);
-  const compact = `${fullLabel}${separator}${compactSignal}`;
-  const minimal = `${fullLabel}${minimalSignal}`;
-  const reset = showReset ? resetCountdown(segment.resetsAt, now) : "";
-  const remaining = remainingQuota(segment.usedFraction);
-  const details = [remaining, reset].filter(Boolean);
+  const withSignal = (signal: string): string =>
+    signal ? `${fullLabel}${separator}${signal}` : fullLabel;
+  const compact = withSignal(compactSignal);
+  const minimal = withSignal(minimalSignal);
   const full = details.length
-    ? `${fullLabel}${separator}${fullSignal}${details
+    ? `${withSignal(fullSignal)}${details
         .map((detail) => `${separator}·${separator}${style(theme, "dim", detail)}`)
         .join("")}`
-    : `${fullLabel}${separator}${fullSignal}`;
+    : withSignal(fullSignal);
   return { full, compact, minimal };
 }
 
+/**
+ * Pack left-to-right preferring full detail (% left + reset).
+ * If the next full form does not fit the remainder but would fit a fresh line,
+ * wrap instead of crushing to compact/minimal. Compact/minimal are only used
+ * when even an empty line cannot hold the full form.
+ */
+function packForms(forms: readonly RenderedForms[], width: number, separator: string): string[] {
+  const lines: string[] = [];
+  let current: string[] = [];
+  let used = 0;
+  const sepWidth = visibleWidth(separator);
+
+  const flush = (): void => {
+    if (current.length === 0) return;
+    lines.push(current.join(separator));
+    current = [];
+    used = 0;
+  };
+
+  for (const form of forms) {
+    const fullWidth = visibleWidth(form.full);
+    const compactWidth = visibleWidth(form.compact);
+    const minimalWidth = visibleWidth(form.minimal);
+    if (minimalWidth > width) continue;
+
+    const leading = current.length > 0 ? sepWidth : 0;
+    const remainder = width - used - leading;
+
+    if (fullWidth <= remainder) {
+      current.push(form.full);
+      used += leading + fullWidth;
+      continue;
+    }
+
+    // Full does not fit here; prefer a fresh line if full can stand alone.
+    if (fullWidth <= width) {
+      flush();
+      current.push(form.full);
+      used = fullWidth;
+      continue;
+    }
+
+    // Full never fits a line alone — degrade to the richest form that does.
+    const degraded = compactWidth <= width ? form.compact : form.minimal;
+    const degradedWidth = visibleWidth(degraded);
+    if (current.length > 0 && used + leading + degradedWidth > width) flush();
+    const joinLeading = current.length > 0 ? sepWidth : 0;
+    current.push(degraded);
+    used += joinLeading + degradedWidth;
+  }
+
+  flush();
+  return lines;
+}
+
+/**
+ * Maximize how many labeled segments share a line by degrading later forms
+ * when needed. Used for layout=fit.
+ */
 function chooseForms(
   forms: readonly RenderedForms[],
   width: number,
@@ -181,38 +321,25 @@ function chooseForms(
   return chosen;
 }
 
-/**
- * Pack segments line by line, keeping each segment's full form and moving
- * whole segments to subsequent lines instead of degrading details to fit.
- * A segment degrades only when its full form cannot fit an empty line.
- */
-function wrapForms(forms: readonly RenderedForms[], width: number, separator: string): string[] {
-  const separatorWidth = visibleWidth(separator);
+/** Fit packing: maximize segment count per line under the width budget. */
+function fitForms(forms: readonly RenderedForms[], width: number, separator: string): string[] {
   const lines: string[] = [];
-  let line: string[] = [];
-  let used = 0;
-  for (const form of forms) {
-    const available = width - used - (line.length > 0 ? separatorWidth : 0);
-    if (visibleWidth(form.full) <= available) {
-      line.push(form.full);
-      used += (line.length > 1 ? separatorWidth : 0) + visibleWidth(form.full);
-      continue;
+  for (let start = 0; start < forms.length; ) {
+    let chosen: string[] | undefined;
+    let chosenLine: string | undefined;
+    for (let count = forms.length - start; count >= 1; count--) {
+      const candidate = chooseForms(forms.slice(start, start + count), width, separator);
+      if (!candidate) continue;
+      const line = candidate.join(separator);
+      if (visibleWidth(line) > width) continue;
+      chosen = candidate;
+      chosenLine = line;
+      break;
     }
-    if (line.length > 0) {
-      lines.push(line.join(separator));
-      line = [];
-      used = 0;
-    }
-    const first =
-      visibleWidth(form.full) <= width
-        ? form.full
-        : visibleWidth(form.compact) <= width
-          ? form.compact
-          : form.minimal;
-    line.push(first);
-    used = visibleWidth(first);
+    if (!chosen || chosenLine === undefined) break;
+    lines.push(chosenLine);
+    start += chosen.length;
   }
-  if (line.length > 0) lines.push(line.join(separator));
   return lines;
 }
 
@@ -224,7 +351,8 @@ export function renderBurndownRow(
 ): readonly string[] {
   const options: BurndownRenderOptions =
     "fg" in optionsOrTheme ? { theme: optionsOrTheme } : optionsOrTheme;
-  const budget = Math.floor(width);
+  // Pack against the host-supplied width.
+  const budget = Math.max(0, Math.floor(width));
   if (budget <= 0 || segments.length === 0) return EMPTY_ROWS;
   const symbols =
     typeof options.symbols === "object" ? options.symbols : symbolsFor(options.symbols ?? "auto");
@@ -244,27 +372,10 @@ export function renderBurndownRow(
     ),
   );
   const renderable = forms.filter((form) => visibleWidth(form.minimal) <= budget);
-  if (options.layout === "wrap") {
-    const wrapped = wrapForms(renderable, budget, separator);
-    return wrapped.length > 0 ? wrapped : EMPTY_ROWS;
-  }
-  const lines: string[] = [];
-  for (let start = 0; start < renderable.length; ) {
-    let chosen: string[] | undefined;
-    let chosenLine: string | undefined;
-    for (let count = renderable.length - start; count >= 1; count--) {
-      const candidate = chooseForms(renderable.slice(start, start + count), budget, separator);
-      if (!candidate) continue;
-      const line = candidate.join(separator);
-      if (visibleWidth(line) > budget) continue;
-      chosen = candidate;
-      chosenLine = line;
-      break;
-    }
-    if (!chosen || chosenLine === undefined) break;
-    lines.push(chosenLine);
-    start += chosen.length;
-  }
+  const lines =
+    options.layout === "wrap"
+      ? packForms(renderable, budget, separator)
+      : fitForms(renderable, budget, separator);
   return lines.length > 0 ? lines : EMPTY_ROWS;
 }
 

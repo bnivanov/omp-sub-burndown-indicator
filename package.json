@@ -1,6 +1,6 @@
 {
   "name": "omp-sub-burndown-indicator",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "One-line subscription quota burndown indicator for Oh My Pi",
   "type": "module",
   "license": "MIT",
@@ -25,14 +25,31 @@
       "density": {
         "type": "enum",
         "description": "Pace signal density",
-        "values": ["dense", "text"],
+        "values": [
+          "dense",
+          "text"
+        ],
         "default": "dense"
       },
       "layout": {
         "type": "enum",
         "description": "Row layout: fit shrinks details to keep every subscription on one line; wrap keeps full details and moves whole segments to extra lines",
-        "values": ["fit", "wrap"],
+        "values": [
+          "fit",
+          "wrap"
+        ],
         "default": "fit"
+      },
+      "windowView": {
+        "type": "enum",
+        "description": "Which quota window class(es) to show: 5h, week, month, or all present classes",
+        "values": [
+          "five_hour",
+          "week",
+          "month",
+          "all"
+        ],
+        "default": "five_hour"
       }
     }
   },

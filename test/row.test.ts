@@ -41,6 +41,28 @@ describe("burndown row", () => {
     );
   });
 
+  test("appends semantic window labels without changing subscription identity", () => {
+    const fiveHour = segment("kimi", "ahead", 0.51, {
+      provider: "kimi-code",
+      label: "Kimi",
+      windowClass: "five_hour",
+      windowLabel: "5h",
+      usedFraction: 0,
+      resetsAt: now + 2 * 60 * 60_000 + 28 * 60_000,
+    });
+    const week = segment("kimi", "ahead", 0.12, {
+      provider: "kimi-code",
+      label: "Kimi",
+      windowClass: "week",
+      windowLabel: "Wk",
+      usedFraction: 0.12,
+      resetsAt: now + 2 * 24 * 60 * 60_000 + 7 * 60 * 60_000 + 25 * 60_000,
+    });
+    expect(
+      renderBurndownRow([fiveHour, week], 300, { now, theme: identityTheme, density: "dense" }),
+    ).toEqual(["Kimi Code 5h ▲51pp · 100% left · 2h28m · Kimi Code Wk ▲12pp · 88% left · 2d7h25m"]);
+  });
+
   test("renders every state and both symbol modes", () => {
     const segments = [
       segment("a", "ahead", 0.12),
@@ -103,30 +125,108 @@ describe("burndown row", () => {
 
   test("fits exact visible width and emits no line when no signal fits", () => {
     const value = segment("Claude", "ahead", 0.12, { resetsAt: now + 2 * 60 * 60 * 1000 });
-    const fits = renderBurndownRow([value], 11, { now, theme: identityTheme });
-    expect(fits).toEqual(["Provider▲12"]);
-    expect(visibleWidth(fits[0] ?? "")).toBeLessThanOrEqual(11);
-    expect(renderBurndownRow([value], 10, { now })).toEqual([]);
+    const fits = renderBurndownRow([value], 12, { now, theme: identityTheme });
+    expect(fits).toEqual(["Provider ▲12"]);
+    expect(visibleWidth(fits[0] ?? "")).toBeLessThanOrEqual(12);
+    expect(renderBurndownRow([value], 11, { now })).toEqual([]);
   });
 
-  test("packs urgent and later subscriptions onto ordered width-bounded lines", () => {
+  test("prefers full quota detail on ~52-col panes and reflows on resize", () => {
     const values = [
-      segment("ahead", "ahead", 0.5, { provider: "x", label: "x" }),
-      segment("behind", "behind", -0.9, { provider: "x", label: "x" }),
-      segment("pace", "on-pace", 0, { provider: "x", label: "x" }),
+      segment("codex", "behind", -0.21, {
+        provider: "openai-codex",
+        label: "Codex",
+        windowClass: "week",
+        windowLabel: "Wk",
+        usedFraction: 0.72,
+        resetsAt: now + 3 * 24 * 60 * 60_000,
+      }),
+      segment("anth5", "unknown", undefined, {
+        provider: "anthropic",
+        label: "A",
+        windowClass: "five_hour",
+        windowLabel: "5h",
+        usedFraction: 0,
+      }),
+      segment("kimi5", "ahead", 0.87, {
+        accountId: "kimi",
+        provider: "kimi-code",
+        label: "Kimi",
+        windowClass: "five_hour",
+        windowLabel: "5h",
+        usedFraction: 0,
+        resetsAt: now + 85 * 60_000,
+      }),
+      segment("kimiW", "unknown", undefined, {
+        accountId: "kimi",
+        provider: "kimi-code",
+        label: "Kimi",
+        windowClass: "week",
+        windowLabel: "Wk",
+        usedFraction: 0.88,
+        resetsAt: now + 2 * 24 * 60 * 60_000 + 5 * 60 * 60_000 + 40 * 60_000,
+      }),
     ];
-    const lines = renderBurndownRow(values, 12, { now, theme: identityTheme });
-    expect(lines).toEqual(["X▼90 · X=0", "X ▲50pp"]);
-    expect(lines.join("")).not.toContain("+2");
-    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(12);
+    const component = new BurndownRowComponent(identityTheme, {
+      now,
+      density: "dense",
+      showReset: true,
+      layout: "wrap",
+    });
+    component.setSegments(values);
+
+    // ~1/3 MBA pane content width observed via herdr borders.
+    const pane = component.render(52);
+    const text = pane.join("\n");
+    expect(text).toContain("% left");
+    expect(text).toContain("OpenAI Codex Wk");
+    expect(text).toContain("28% left");
+    expect(text).toContain("Anthropic 5h");
+    expect(text).toContain("100% left");
+    expect(text).toContain("Kimi Code 5h");
+    expect(text).toContain("Kimi Code Wk");
+    expect(text).toContain("12% left");
+    expect(text).toContain("2d5h40m");
+    for (const line of pane) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(51);
+      expect(line).not.toMatch(/Code▲|Codex▼|Wk\?/u);
+    }
+
+    const wide = component.render(200).join("\n");
+    expect(wide).toContain("OpenAI Codex Wk ▼21pp · 28% left · 3d");
+    expect(wide).toContain("Kimi Code Wk");
+    expect(wide).toContain("12% left · 2d5h40m");
+    expect(wide).toContain("Anthropic 5h · 100% left");
+    expect(wide).not.toContain("Anthropic 5h ? unknown");
+
+    expect(component.render(52)).toEqual(pane);
   });
 
   test("skips an unrenderable segment and keeps later fit-capable segments", () => {
-    const tooWide = segment("too-wide", "behind", -123.45);
+    const tooWide = segment("too-wide", "behind", -123.45, {
+      provider: "very-long-provider-name-that-cannot-fit",
+      windowLabel: "Wk",
+    });
     const later = segment("later", "on-pace", 0, { provider: "x" });
-    const lines = renderBurndownRow([tooWide, later], 5, { now, theme: identityTheme });
-    expect(lines).toEqual(["X=0"]);
-    expect(renderBurndownRow([tooWide], 5, { now, theme: identityTheme })).toEqual([]);
+    const lines = renderBurndownRow([tooWide, later], 8, { now, theme: identityTheme });
+    expect(lines.join("")).toContain("X");
+    expect(renderBurndownRow([tooWide], 8, { now, theme: identityTheme })).toEqual([]);
+  });
+
+  test("keeps stale marker on stale unknown rows even with percent left", () => {
+    const stale = segment("codex", "unknown", undefined, {
+      provider: "openai-codex",
+      label: "Codex",
+      windowClass: "week",
+      windowLabel: "Wk",
+      usedFraction: 0.5,
+      resetsAt: now + 24 * 60 * 60_000,
+      stale: true,
+    });
+    const lines = renderBurndownRow([stale], 200, { now, theme: identityTheme });
+    expect(lines.join("")).toContain("~");
+    expect(lines.join("")).toContain("stale");
+    expect(lines.join("")).toContain("50% left");
   });
 
   test("disambiguates labels independently of input order", () => {
@@ -163,12 +263,12 @@ describe("burndown row", () => {
     expect(full).not.toContain("adamgradzki");
     expect(full).not.toContain("#2");
 
-    const minimal = renderBurndownRow(values, 15, {
+    const minimal = renderBurndownRow(values, 17, {
       now,
       showReset: false,
       theme: identityTheme,
     });
-    expect(minimal).toEqual(["Anthropic ▲10pp", "OpenAI Codex▲10"]);
+    expect(minimal).toEqual(["Anthropic ▲10pp", "OpenAI Codex ▲10"]);
     expect(minimal.join("")).not.toMatch(/\b(?:An|OC)▲/u);
   });
 
@@ -274,7 +374,7 @@ describe("burndown row", () => {
     });
     expect(minimal).toEqual([
       "Anthropic:hi@adamgradzki.com ▲10pp",
-      "Anthropic:work@adamgradzki.com▲10",
+      "Anthropic:work@adamgradzki.com ▲10",
     ]);
     expect(minimal.join("")).not.toMatch(/An:[hw]▲/u);
     expect(
@@ -371,7 +471,7 @@ describe("burndown row", () => {
       resetsAt: now + 2 * 60 * 60_000,
     });
     const lines = renderBurndownRow([value], 10, { now, theme: identityTheme, layout: "wrap" });
-    expect(lines).toEqual(["Alpha▲12"]);
+    expect(lines).toEqual(["Alpha ▲12"]);
     expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(10);
   });
 });

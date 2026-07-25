@@ -1,3 +1,5 @@
+import { isWindowViewMode, type WindowViewMode } from "./domain/window-class.ts";
+
 export type SymbolMode = "auto" | "unicode" | "ascii";
 export type DensityMode = "dense" | "text";
 export type LayoutMode = "fit" | "wrap";
@@ -12,6 +14,7 @@ export interface BurndownConfig {
   symbols: SymbolMode;
   density: DensityMode;
   layout: LayoutMode;
+  windowView: WindowViewMode;
   showReset: boolean;
   clockSkewMs: number;
 }
@@ -30,6 +33,15 @@ function layoutValue(pluginSettings: Readonly<Record<string, unknown>>): LayoutM
   if (configured === undefined) return "fit";
   if (configured !== "fit" && configured !== "wrap") {
     throw new Error("layout must be fit or wrap");
+  }
+  return configured;
+}
+
+function windowViewValue(pluginSettings: Readonly<Record<string, unknown>>): WindowViewMode {
+  const configured = pluginSettings.windowView;
+  if (configured === undefined) return "five_hour";
+  if (!isWindowViewMode(configured)) {
+    throw new Error("windowView must be five_hour, week, month, or all");
   }
   return configured;
 }
@@ -84,6 +96,7 @@ export function readConfig(
 
   const density = densityValue(pluginSettings);
   const layout = layoutValue(pluginSettings);
+  const windowView = windowViewValue(pluginSettings);
   const refreshSeconds = boundedNumber(
     env,
     "OMP_SUB_BURNDOWN_REFRESH_SECONDS",
@@ -128,6 +141,7 @@ export function readConfig(
     symbols,
     density,
     layout,
+    windowView,
     showReset: booleanValue(env, "OMP_SUB_BURNDOWN_SHOW_RESET", true),
     clockSkewMs: clockSkewSeconds * 1_000,
   };
