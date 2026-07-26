@@ -269,6 +269,7 @@ Provider names use complete readable brands (`Anthropic`, `OpenAI Codex`, `Googl
 Run:
 
 ```text
+/burndown
 /burndown status
 /burndown view
 /burndown view hour
@@ -283,11 +284,11 @@ Run:
 /burndown provider truncate <0-256>
 ```
 
-`/burndown status` reports the active window view, enabled sources, last successful
-refresh, error category, discovered providers, reported providers, and why a provider
-is unavailable. It never contains credentials. `/burndown view` with no mode cycles
-`hour → week → month → all`; an explicit mode sets the view immediately. Every
-mutating command persists its setting through OMP's plugin runtime settings and
+`/burndown` (or `/burndown status`) reports the active window view, enabled sources,
+last successful refresh, error category, discovered providers, reported providers, and
+why a provider is unavailable. It never contains credentials. `/burndown view` with no
+mode cycles `hour → week → month → all`; an explicit mode sets the view immediately.
+Every mutating command persists its setting through OMP's plugin runtime settings and
 re-renders the indicator. Restart OMP after installing or linking a new plugin version,
 because slash commands register only at extension load.
 

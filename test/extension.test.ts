@@ -83,7 +83,7 @@ test("default factory registers lifecycle, commands, and plugin-runtime persiste
   expect(installed?.placement).toBe("aboveEditor");
   expect(typeof installed?.content).toBe("function");
 
-  await commands.get("burndown")?.handler("status", interactive.ctx);
+  await commands.get("burndown")?.handler("", interactive.ctx);
   expect(interactive.notifications[0]).toContain("Burndown status");
   expect(interactive.notifications[0]).toContain("windowView:");
 

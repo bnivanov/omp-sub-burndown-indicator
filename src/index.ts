@@ -145,7 +145,7 @@ export default function subscriptionBurndownExtension(
     getArgumentCompletions: completions,
     handler: async (args, ctx) => {
       const normalized = args.trim();
-      if (normalized === "status") {
+      if (normalized === "" || normalized === "status") {
         if (ctx.hasUI) ctx.ui.notify(controller.status(), "info");
         return;
       }
