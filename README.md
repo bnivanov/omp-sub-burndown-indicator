@@ -218,8 +218,9 @@ With the default compact output, `▼4 points behind` becomes `▼4pp`, retainin
 direction glyph. The text setting restores `▼4 points behind`; ahead and on-pace
 signals likewise use `▲12pp` and `=0pp` in compact output or their full text forms
 when text is selected. `masked` account labels preserve a short local-part hint
-(`work@example.invalid` becomes `wor***`), while `provider-only` hides the account
-identifier. `exhaustedDisplay: reset` omits remaining quota, and
+(`work@example.invalid` becomes `wor***`); accounts whose hints collide keep the
+usual `#2` ordinal so they stay distinguishable, while `provider-only` hides the
+account identifier entirely. `exhaustedDisplay: reset` omits remaining quota, and
 `exhaustedLabel: symbol` renders `!` without `exhausted`. Window-class suffixes
 (`5h` / `Wk` / `Mo` / real duration tags) stay on every width tier, including the
 minimal form, so dual-window accounts remain distinguishable under pressure.

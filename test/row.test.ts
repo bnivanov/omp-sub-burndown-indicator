@@ -92,6 +92,33 @@ describe("burndown row", () => {
     expect(rendered).toContain("1h");
   });
 
+  test("keeps masked account labels distinct when local parts share a prefix", () => {
+    const values = [
+      segment("a", "ahead", 0.1, {
+        provider: "kimi-code",
+        label: "dev.account7@example.test",
+        accountId: "a",
+      }),
+      segment("b", "ahead", 0.1, {
+        provider: "kimi-code",
+        label: "dev.account7@example.invalid",
+        accountId: "b",
+      }),
+    ];
+    const render = (input: BurndownSegment[]): string =>
+      renderBurndownRow(input, 300, {
+        now,
+        theme: identityTheme,
+        accountLabels: "masked",
+      }).join("");
+    const rendered = render(values);
+    expect(rendered).toContain("Kimi Code:dev***");
+    expect(rendered).toContain("Kimi Code:dev***#2");
+    // Masking must not disclose the domain, and must stay stable under reordering.
+    expect(rendered).not.toContain("@");
+    expect(render([...values].reverse())).toBe(rendered);
+  });
+
   test("renders every state and both symbol modes", () => {
     const segments = [
       segment("a", "ahead", 0.12),

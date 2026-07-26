@@ -7,13 +7,7 @@ import type {
   LayoutMode,
 } from "../config";
 import type { BurndownSegment, SegmentState } from "../domain/types";
-import {
-  buildStableLabels,
-  labelFor,
-  maskAccountLabel,
-  providerLabelFor,
-  type StableLabels,
-} from "./labels";
+import { buildStableLabels, labelFor, providerLabelFor, type StableLabels } from "./labels";
 import {
   type BurndownSymbols,
   describeSegmentSignal,
@@ -256,11 +250,7 @@ function formsFor(
   const windowSuffix = segment.windowLabel?.trim();
   const branded = windowSuffix ? `${provider} ${windowSuffix}` : provider;
   const qualifiedLabel =
-    !hasDistinctAccount || accountLabels === "provider-only"
-      ? branded
-      : accountLabels === "masked"
-        ? `${branded}:${maskAccountLabel(account)}`
-        : `${branded}:${account}`;
+    !hasDistinctAccount || accountLabels === "provider-only" ? branded : `${branded}:${account}`;
   const fullLabel = style(theme, "muted", qualifiedLabel);
   const withSignal = (signal: string): string =>
     signal ? `${fullLabel}${separator}${signal}` : fullLabel;
@@ -408,7 +398,7 @@ export function renderBurndownRow(
     typeof options.symbols === "object" ? options.symbols : symbolsFor(options.symbols ?? "auto");
   const separator = options.separator ?? DEFAULT_SEPARATOR;
   const sorted = sortBurndownSegments(segments);
-  const labels = buildStableLabels(sorted);
+  const labels = buildStableLabels(sorted, options.accountLabels === "masked");
   const renderNow = nowValue(options.now);
   const forms = sorted.map((segment) =>
     formsFor(
