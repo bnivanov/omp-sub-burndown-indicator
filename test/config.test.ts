@@ -43,6 +43,7 @@ describe("readConfig", () => {
         OMP_SUB_BURNDOWN_EXHAUSTED_LABEL: "symbol",
         OMP_SUB_BURNDOWN_PROVIDER_LABEL_MAX_COLUMNS: "12",
         OMP_SUB_BURNDOWN_PROVIDERS: "OpenAI-Codex, Anthropic",
+        OMP_SUB_BURNDOWN_WINDOW_VIEW: "all",
       },
       {
         density: "dense",
@@ -50,6 +51,7 @@ describe("readConfig", () => {
         exhaustedDisplay: "reset",
         exhaustedLabel: "full",
         providerLabelMaxColumns: 8,
+        windowView: "week",
       },
     );
     expect(config.density).toBe("text");
@@ -58,6 +60,11 @@ describe("readConfig", () => {
     expect(config.exhaustedLabel).toBe("symbol");
     expect(config.providerLabelMaxColumns).toBe(12);
     expect(config.providerFilter).toEqual(new Set(["openai-codex", "anthropic"]));
+    expect(config.windowView).toBe("all");
+    expect(readConfig({}, { windowView: "week" }).windowView).toBe("week");
+    expect(() => readConfig({ OMP_SUB_BURNDOWN_WINDOW_VIEW: "hour" })).toThrow(
+      "windowView must be five_hour, week, month, or all",
+    );
     expect(() => readConfig({}, { providerLabelMaxColumns: 257 })).toThrow(
       "providerLabelMaxColumns",
     );

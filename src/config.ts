@@ -61,8 +61,16 @@ function layoutValue(
   return configured;
 }
 
-function windowViewValue(pluginSettings: Readonly<Record<string, unknown>>): WindowViewMode {
-  const configured = pluginSettings.windowView;
+function windowViewValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): WindowViewMode {
+  const configured = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_WINDOW_VIEW",
+    "windowView",
+  );
   if (configured === undefined) return "five_hour";
   if (!isWindowViewMode(configured)) {
     throw new Error("windowView must be five_hour, week, month, or all");
@@ -189,7 +197,7 @@ export function readConfig(
 
   const density = densityValue(env, pluginSettings);
   const layout = layoutValue(env, pluginSettings);
-  const windowView = windowViewValue(pluginSettings);
+  const windowView = windowViewValue(env, pluginSettings);
   const accountLabels = accountLabelsValue(env, pluginSettings);
   const exhaustedDisplay = exhaustedDisplayValue(env, pluginSettings);
   const exhaustedLabel = exhaustedLabelValue(env, pluginSettings);

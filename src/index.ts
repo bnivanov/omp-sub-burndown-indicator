@@ -153,7 +153,19 @@ export default function subscriptionBurndownExtension(
       const [command, view] = normalized.toLocaleLowerCase().split(/\s+/u);
       if (command === "view" && normalized.split(/\s+/u).length <= 2) {
         const result = controller.applyWindowViewCommand(view ?? "");
-        if (result.changed) await persistSetting(ctx.cwd, "windowView", result.mode);
+        if (result.changed) {
+          try {
+            await persistSetting(ctx.cwd, "windowView", result.mode);
+          } catch {
+            if (ctx.hasUI) {
+              ctx.ui.notify(
+                "Burndown view changed for this session only; unable to persist setting.",
+                "warning",
+              );
+            }
+            return;
+          }
+        }
         if (ctx.hasUI) ctx.ui.notify(result.detail, "info");
         return;
       }
@@ -163,9 +175,24 @@ export default function subscriptionBurndownExtension(
         if (ctx.hasUI) ctx.ui.notify(USAGE, "warning");
         return;
       }
-      await persistSetting(ctx.cwd, change.setting, change.value);
-      await controller.restart(ctx, await readSettings(ctx));
-      if (ctx.hasUI) ctx.ui.notify("Burndown display updated.", "info");
+      let persisted = true;
+      try {
+        await persistSetting(ctx.cwd, change.setting, change.value);
+      } catch {
+        persisted = false;
+      }
+      await controller.restart(ctx, {
+        ...(await readSettings(ctx)),
+        [change.setting]: change.value,
+      });
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          persisted
+            ? "Burndown display updated."
+            : "Burndown display updated for this session only; unable to persist setting.",
+          persisted ? "info" : "warning",
+        );
+      }
     },
   });
 }

@@ -177,6 +177,7 @@ rewriting it:
 | Variable | Default | Accepted values |
 | --- | ---: | --- |
 | `OMP_SUB_BURNDOWN_DENSITY` | `dense` | `dense` or `text` |
+| `OMP_SUB_BURNDOWN_WINDOW_VIEW` | `five_hour` | `five_hour`, `week`, `month`, or `all` |
 | `OMP_SUB_BURNDOWN_LAYOUT` | `fit` | `fit` or `wrap` |
 | `OMP_SUB_BURNDOWN_ACCOUNT_LABELS` | `full` | `full`, `masked`, or `provider-only` |
 | `OMP_SUB_BURNDOWN_EXHAUSTED_DISPLAY` | `status` | `status` or `reset` |
@@ -288,8 +289,8 @@ Run:
 last successful refresh, error category, discovered providers, reported providers, and
 why a provider is unavailable. It never contains credentials. `/burndown view` with no
 mode cycles `hour → week → month → all`; an explicit mode sets the view immediately.
-Every mutating command persists its setting through OMP's plugin runtime settings and
-re-renders the indicator. Restart OMP after installing or linking a new plugin version,
+Every mutating command applies immediately and attempts to persist its setting through OMP's plugin runtime settings; a persistence failure leaves the change active only for the current session.
+Restart OMP after installing or linking a new plugin version,
 because slash commands register only at extension load.
 
 
