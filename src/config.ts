@@ -3,6 +3,9 @@ import { isWindowViewMode, type WindowViewMode } from "./domain/window-class.ts"
 export type SymbolMode = "auto" | "unicode" | "ascii";
 export type DensityMode = "dense" | "text";
 export type LayoutMode = "fit" | "wrap";
+export type AccountLabelsMode = "full" | "masked" | "provider-only";
+export type ExhaustedDisplayMode = "status" | "reset";
+export type ExhaustedLabelMode = "full" | "symbol";
 
 export interface BurndownConfig {
   broker?: { url: string; token: string };
@@ -15,12 +18,30 @@ export interface BurndownConfig {
   density: DensityMode;
   layout: LayoutMode;
   windowView: WindowViewMode;
+  accountLabels: AccountLabelsMode;
+  exhaustedDisplay: ExhaustedDisplayMode;
+  exhaustedLabel: ExhaustedLabelMode;
+  providerLabelMaxColumns: number;
+  /** When set, only these provider IDs (lowercase) appear in the indicator. */
+  providerFilter?: ReadonlySet<string>;
   showReset: boolean;
   clockSkewMs: number;
 }
 
-function densityValue(pluginSettings: Readonly<Record<string, unknown>>): DensityMode {
-  const configured = pluginSettings.density;
+function settingOrEnv(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+  envName: string,
+  settingName: string,
+): unknown {
+  return env[envName] ?? pluginSettings[settingName];
+}
+
+function densityValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): DensityMode {
+  const configured = settingOrEnv(env, pluginSettings, "OMP_SUB_BURNDOWN_DENSITY", "density");
   if (configured === undefined) return "dense";
   if (configured !== "dense" && configured !== "text") {
     throw new Error("density must be dense or text");
@@ -28,8 +49,11 @@ function densityValue(pluginSettings: Readonly<Record<string, unknown>>): Densit
   return configured;
 }
 
-function layoutValue(pluginSettings: Readonly<Record<string, unknown>>): LayoutMode {
-  const configured = pluginSettings.layout;
+function layoutValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): LayoutMode {
+  const configured = settingOrEnv(env, pluginSettings, "OMP_SUB_BURNDOWN_LAYOUT", "layout");
   if (configured === undefined) return "fit";
   if (configured !== "fit" && configured !== "wrap") {
     throw new Error("layout must be fit or wrap");
@@ -44,6 +68,75 @@ function windowViewValue(pluginSettings: Readonly<Record<string, unknown>>): Win
     throw new Error("windowView must be five_hour, week, month, or all");
   }
   return configured;
+}
+
+function accountLabelsValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): AccountLabelsMode {
+  const configured = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_ACCOUNT_LABELS",
+    "accountLabels",
+  );
+  if (configured === undefined) return "full";
+  if (configured !== "full" && configured !== "masked" && configured !== "provider-only") {
+    throw new Error("accountLabels must be full, masked, or provider-only");
+  }
+  return configured;
+}
+
+function exhaustedDisplayValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): ExhaustedDisplayMode {
+  const configured = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_EXHAUSTED_DISPLAY",
+    "exhaustedDisplay",
+  );
+  if (configured === undefined) return "status";
+  if (configured !== "status" && configured !== "reset") {
+    throw new Error("exhaustedDisplay must be status or reset");
+  }
+  return configured;
+}
+
+function exhaustedLabelValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): ExhaustedLabelMode {
+  const configured = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_EXHAUSTED_LABEL",
+    "exhaustedLabel",
+  );
+  if (configured === undefined) return "full";
+  if (configured !== "full" && configured !== "symbol") {
+    throw new Error("exhaustedLabel must be full or symbol");
+  }
+  return configured;
+}
+
+function providerLabelMaxColumnsValue(
+  env: Record<string, string | undefined>,
+  pluginSettings: Readonly<Record<string, unknown>>,
+): number {
+  const configured = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_PROVIDER_LABEL_MAX_COLUMNS",
+    "providerLabelMaxColumns",
+  );
+  if (configured === undefined) return 0;
+  const parsed = typeof configured === "number" ? configured : Number(configured);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 256) {
+    throw new Error("providerLabelMaxColumns must be an integer from 0 through 256");
+  }
+  return parsed;
 }
 
 const DEFAULTS = {
@@ -94,9 +187,13 @@ export function readConfig(
     throw new Error("OMP_SUB_BURNDOWN_SYMBOLS must be auto, unicode, or ascii");
   }
 
-  const density = densityValue(pluginSettings);
-  const layout = layoutValue(pluginSettings);
+  const density = densityValue(env, pluginSettings);
+  const layout = layoutValue(env, pluginSettings);
   const windowView = windowViewValue(pluginSettings);
+  const accountLabels = accountLabelsValue(env, pluginSettings);
+  const exhaustedDisplay = exhaustedDisplayValue(env, pluginSettings);
+  const exhaustedLabel = exhaustedLabelValue(env, pluginSettings);
+  const providerLabelMaxColumns = providerLabelMaxColumnsValue(env, pluginSettings);
   const refreshSeconds = boundedNumber(
     env,
     "OMP_SUB_BURNDOWN_REFRESH_SECONDS",
@@ -133,6 +230,16 @@ export function readConfig(
     300,
   );
 
+  const providerFilterRaw = env.OMP_SUB_BURNDOWN_PROVIDERS?.trim();
+  const providerFilter = providerFilterRaw
+    ? new Set(
+        providerFilterRaw
+          .split(",")
+          .map((provider) => provider.trim().toLocaleLowerCase())
+          .filter(Boolean),
+      )
+    : undefined;
+
   const config: BurndownConfig = {
     refreshMs: refreshSeconds * 1_000,
     staleAfterMs: staleAfterSeconds * 1_000,
@@ -142,8 +249,13 @@ export function readConfig(
     density,
     layout,
     windowView,
+    accountLabels,
+    exhaustedDisplay,
+    exhaustedLabel,
+    providerLabelMaxColumns,
     showReset: booleanValue(env, "OMP_SUB_BURNDOWN_SHOW_RESET", true),
     clockSkewMs: clockSkewSeconds * 1_000,
+    ...(providerFilter ? { providerFilter } : {}),
   };
 
   if (brokerUrl && brokerToken) {

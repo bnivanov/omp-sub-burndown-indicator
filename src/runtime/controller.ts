@@ -131,7 +131,7 @@ export class IndicatorController {
       return {
         mode: this.#windowView,
         changed: false,
-        detail: "Usage: /burndown-view [hour|week|month|all|status]. Cycle with no args.",
+        detail: "Usage: /burndown view [hour|week|month|all]. Cycle with no mode.",
       };
     }
     const next = parsed ?? nextWindowViewMode(this.#windowView);
@@ -234,7 +234,7 @@ export class IndicatorController {
     };
   }
 
-  /** Human-readable output used by /burndown-status. It never contains credentials. */
+  /** Human-readable output used by /burndown status. It never contains credentials. */
   status(): string {
     const diagnostic = this.diagnostic();
     const sourceLines = diagnostic.sources.map((source) => {
@@ -268,7 +268,7 @@ export class IndicatorController {
     ].join("\n");
   }
 
-  /** Secret-free per-limit classification dump for /burndown-status. */
+  /** Secret-free per-limit classification dump for /burndown status. */
   #windowDiagnosticLines(): string[] {
     const lines: string[] = [];
     for (const snapshot of this.#currentSnapshots()) {
@@ -396,6 +396,10 @@ export class IndicatorController {
               symbols: this.#config?.symbols ?? "auto",
               density: this.#config?.density ?? "dense",
               layout: this.#config?.layout ?? "fit",
+              accountLabels: this.#config?.accountLabels ?? "full",
+              exhaustedDisplay: this.#config?.exhaustedDisplay ?? "status",
+              exhaustedLabel: this.#config?.exhaustedLabel ?? "full",
+              providerLabelMaxColumns: this.#config?.providerLabelMaxColumns ?? 0,
               showReset: this.#config?.showReset ?? true,
             });
             this.#component.setSegments(this.#lastSegments);
@@ -424,8 +428,11 @@ export class IndicatorController {
   #currentSnapshots(): SubscriptionSnapshot[] {
     const coordinatorSnapshots = this.#coordinator?.current() ?? [];
     const responseSnapshots = this.#responseSource?.current() ?? [];
-    return mergeSnapshots([coordinatorSnapshots, responseSnapshots]).filter((snapshot) =>
-      isProviderEnabled(snapshot.provider),
+    const providerFilter = this.#config?.providerFilter;
+    return mergeSnapshots([coordinatorSnapshots, responseSnapshots]).filter(
+      (snapshot) =>
+        isProviderEnabled(snapshot.provider) &&
+        (!providerFilter || providerFilter.has(snapshot.provider.toLocaleLowerCase())),
     );
   }
 

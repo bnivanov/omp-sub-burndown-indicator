@@ -36,7 +36,7 @@ function fakeContext(hasUI: boolean) {
   return { ctx, widgets, notifications };
 }
 
-test("default factory registers public lifecycle, response, and diagnostic contracts", async () => {
+test("default factory registers lifecycle, commands, and plugin-runtime persistence", async () => {
   const handlers = new Map<string, Handler>();
   const commands = new Map<
     string,
@@ -58,11 +58,13 @@ test("default factory registers public lifecycle, response, and diagnostic contr
       commands.set(name, { name, ...options });
     },
   } as unknown as ExtensionAPI;
-  const persisted: string[] = [];
+  const settings: Record<string, unknown> = {};
+  const persisted: Array<[string, string | number]> = [];
   subscriptionBurndownExtension(api, {
-    readPluginSettings: async () => ({}),
-    persistWindowView: async (_cwd, mode) => {
-      persisted.push(mode);
+    readPluginSettings: async () => settings,
+    persistPluginSetting: async (_cwd, setting, value) => {
+      persisted.push([setting, value]);
+      settings[setting] = value;
     },
   });
   expect([...handlers.keys()].sort()).toEqual([
@@ -72,7 +74,7 @@ test("default factory registers public lifecycle, response, and diagnostic contr
     "session_switch",
     "session_tree",
   ]);
-  expect([...commands.keys()].sort()).toEqual(["burndown-status", "burndown-view"]);
+  expect([...commands.keys()]).toEqual(["burndown"]);
 
   const interactive = fakeContext(true);
   await handlers.get("session_start")?.({ type: "session_start" }, interactive.ctx);
@@ -81,28 +83,35 @@ test("default factory registers public lifecycle, response, and diagnostic contr
   expect(installed?.placement).toBe("aboveEditor");
   expect(typeof installed?.content).toBe("function");
 
-  await commands.get("burndown-status")?.handler("", interactive.ctx);
+  await commands.get("burndown")?.handler("status", interactive.ctx);
   expect(interactive.notifications[0]).toContain("Burndown status");
   expect(interactive.notifications[0]).toContain("windowView:");
 
-  await commands.get("burndown-view")?.handler("week", interactive.ctx);
+  await commands.get("burndown")?.handler("view week", interactive.ctx);
   expect(interactive.notifications.at(-1)).toContain("Burndown view: week");
-  expect(persisted).toEqual(["week"]);
+  expect(persisted).toEqual([["windowView", "week"]]);
 
-  await commands.get("burndown-view")?.handler("hour", interactive.ctx);
-  expect(interactive.notifications.at(-1)).toContain("Burndown view: hour");
-  expect(persisted).toEqual(["week", "five_hour"]);
-
-  const completions = commands.get("burndown-view")?.getArgumentCompletions;
-  expect(completions?.("")).toEqual([
-    { value: "hour", label: "hour" },
-    { value: "week", label: "week" },
-    { value: "month", label: "month" },
-    { value: "all", label: "all" },
-    { value: "status", label: "status" },
+  await commands.get("burndown")?.handler("labels masked", interactive.ctx);
+  await commands.get("burndown")?.handler("provider truncate 8", interactive.ctx);
+  await commands.get("burndown")?.handler("exhausted label symbol", interactive.ctx);
+  expect(persisted).toEqual([
+    ["windowView", "week"],
+    ["accountLabels", "masked"],
+    ["providerLabelMaxColumns", 8],
+    ["exhaustedLabel", "symbol"],
   ]);
-  expect(completions?.("w")).toEqual([{ value: "week", label: "week" }]);
+
+  const completions = commands.get("burndown")?.getArgumentCompletions;
+  expect(completions?.("view ")).toEqual([
+    { value: "view hour", label: "view hour" },
+    { value: "view week", label: "view week" },
+    { value: "view month", label: "view month" },
+    { value: "view all", label: "view all" },
+  ]);
   expect(completions?.("zz")).toBeNull();
+
+  await commands.get("burndown")?.handler("labels hidden", interactive.ctx);
+  expect(interactive.notifications.at(-1)).toContain("Usage: /burndown");
 
   await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, interactive.ctx);
   expect(interactive.widgets.at(-1)?.content).toBeUndefined();
@@ -116,7 +125,7 @@ test("headless and component-stubbing hosts degrade without throwing", async () 
   } as unknown as ExtensionAPI;
   subscriptionBurndownExtension(api, {
     readPluginSettings: async () => ({}),
-    persistWindowView: async () => undefined,
+    persistPluginSetting: async () => undefined,
   });
 
   const headless = fakeContext(false);

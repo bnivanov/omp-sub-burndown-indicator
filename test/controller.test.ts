@@ -19,6 +19,10 @@ const config: BurndownConfig = {
   density: "dense",
   layout: "fit",
   windowView: "five_hour",
+  accountLabels: "full",
+  exhaustedDisplay: "status",
+  exhaustedLabel: "full",
+  providerLabelMaxColumns: 0,
   showReset: false,
   clockSkewMs: 0,
 };
@@ -271,7 +275,7 @@ test("window view command cycles, reports status, and rejects unknown tokens", (
   const invalid = controller.applyWindowViewCommand("nope");
   expect(invalid.mode).toBe("five_hour");
   expect(invalid.changed).toBe(false);
-  expect(invalid.detail).toContain("Usage: /burndown-view");
+  expect(invalid.detail).toContain("Usage: /burndown view");
 });
 
 test("headless startup performs no source work or widget calls", async () => {

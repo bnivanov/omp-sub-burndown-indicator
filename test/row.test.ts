@@ -63,6 +63,35 @@ describe("burndown row", () => {
     ).toEqual(["Kimi Code 5h ▲51pp · 100% left · 2h28m · Kimi Code Wk ▲12pp · 88% left · 2d7h25m"]);
   });
 
+  test("applies privacy, truncation, and exhausted display controls", () => {
+    const values = [
+      segment("first", "exhausted", undefined, {
+        provider: "openai-codex",
+        label: "work@example.test",
+        accountId: "first",
+        usedFraction: 1,
+        resetsAt: now + 60 * 60_000,
+      }),
+      segment("second", "ahead", 0.1, {
+        provider: "openai-codex",
+        label: "personal@example.test",
+        accountId: "second",
+      }),
+    ];
+    const rendered = renderBurndownRow(values, 200, {
+      now,
+      theme: identityTheme,
+      accountLabels: "masked",
+      exhaustedDisplay: "reset",
+      exhaustedLabel: "symbol",
+      providerLabelMaxColumns: 8,
+    }).join("");
+    expect(rendered).toContain("OpenAI …:wor*** !");
+    expect(rendered).toContain("OpenAI …:per***");
+    expect(rendered).not.toContain("100% left");
+    expect(rendered).toContain("1h");
+  });
+
   test("renders every state and both symbol modes", () => {
     const segments = [
       segment("a", "ahead", 0.12),

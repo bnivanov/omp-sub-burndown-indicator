@@ -50,6 +50,39 @@
           "all"
         ],
         "default": "five_hour"
+      },
+      "accountLabels": {
+        "type": "enum",
+        "description": "How account labels are shown",
+        "values": [
+          "full",
+          "masked",
+          "provider-only"
+        ],
+        "default": "full"
+      },
+      "exhaustedDisplay": {
+        "type": "enum",
+        "description": "Whether exhausted rows retain remaining quota or show reset only",
+        "values": [
+          "status",
+          "reset"
+        ],
+        "default": "status"
+      },
+      "exhaustedLabel": {
+        "type": "enum",
+        "description": "Use a full exhausted label or compact symbol",
+        "values": [
+          "full",
+          "symbol"
+        ],
+        "default": "full"
+      },
+      "providerLabelMaxColumns": {
+        "type": "number",
+        "description": "Maximum provider-label width in terminal columns; 0 disables clipping",
+        "default": 0
       }
     }
   },

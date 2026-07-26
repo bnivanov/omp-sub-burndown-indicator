@@ -1,17 +1,32 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getPluginSettings, PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
-import { WINDOW_VIEW_COMMAND_TOKENS, type WindowViewMode } from "./domain/window-class.ts";
 import { IndicatorController } from "./runtime/controller.ts";
 
 const PLUGIN_NAME = "omp-sub-burndown-indicator";
+const USAGE =
+  "Usage: /burndown status | view [hour|week|month|all] | labels <full|masked|provider-only> | density <dense|text> | layout <fit|wrap> | exhausted <status|reset|label <full|symbol>> | provider truncate <0-256>";
+
+type MutablePluginSetting =
+  | "accountLabels"
+  | "density"
+  | "exhaustedDisplay"
+  | "exhaustedLabel"
+  | "layout"
+  | "providerLabelMaxColumns"
+  | "windowView";
+type MutableSettingValue = string | number;
 
 export interface ExtensionDependencies {
   /** Test seam: override controller construction. */
   controller?: IndicatorController;
   /** Test seam: override plugin-settings read. */
   readPluginSettings?: (ctx: { cwd: string }) => Promise<Readonly<Record<string, unknown>>>;
-  /** Test seam: override windowView persistence (default writes omp-plugins.lock.json). */
-  persistWindowView?: (cwd: string, mode: WindowViewMode) => Promise<void>;
+  /** Test seam: override plugin-setting persistence. */
+  persistPluginSetting?: (
+    cwd: string,
+    setting: MutablePluginSetting,
+    value: MutableSettingValue,
+  ) => Promise<void>;
 }
 
 async function defaultPluginSettings(ctx: {
@@ -20,12 +35,83 @@ async function defaultPluginSettings(ctx: {
   return getPluginSettings(PLUGIN_NAME, ctx.cwd);
 }
 
-async function defaultPersistWindowView(cwd: string, mode: WindowViewMode): Promise<void> {
-  try {
-    await new PluginManager(cwd).setPluginSetting(PLUGIN_NAME, "windowView", mode);
-  } catch {
-    // Persistence is best-effort; the live session still applies the mode.
+async function defaultPersistPluginSetting(
+  cwd: string,
+  setting: MutablePluginSetting,
+  value: MutableSettingValue,
+): Promise<void> {
+  await new PluginManager(cwd).setPluginSetting(PLUGIN_NAME, setting, value);
+}
+
+function completions(argumentPrefix: string): Array<{ value: string; label: string }> | null {
+  const prefix = argumentPrefix.trimStart().toLocaleLowerCase();
+  const values =
+    prefix === "" || !prefix.includes(" ")
+      ? ["status", "view", "labels", "density", "layout", "exhausted", "provider"]
+      : prefix.startsWith("view ")
+        ? ["view hour", "view week", "view month", "view all"]
+        : prefix.startsWith("labels ")
+          ? ["labels full", "labels masked", "labels provider-only"]
+          : prefix.startsWith("density ")
+            ? ["density dense", "density text"]
+            : prefix.startsWith("layout ")
+              ? ["layout fit", "layout wrap"]
+              : prefix.startsWith("exhausted ")
+                ? [
+                    "exhausted status",
+                    "exhausted reset",
+                    "exhausted label full",
+                    "exhausted label symbol",
+                  ]
+                : prefix.startsWith("provider ")
+                  ? ["provider truncate"]
+                  : [];
+  const matches = values.filter((value) => value.startsWith(prefix));
+  return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
+}
+
+function displayChange(
+  args: string,
+):
+  | { setting: Exclude<MutablePluginSetting, "windowView">; value: MutableSettingValue }
+  | undefined {
+  const tokens = args.trim().toLocaleLowerCase().split(/\s+/u);
+  const [command, value, extra] = tokens;
+  if (
+    command === "labels" &&
+    (value === "full" || value === "masked" || value === "provider-only") &&
+    extra === undefined
+  ) {
+    return { setting: "accountLabels", value };
   }
+  if (command === "density" && (value === "dense" || value === "text") && extra === undefined) {
+    return { setting: "density", value };
+  }
+  if (command === "layout" && (value === "fit" || value === "wrap") && extra === undefined) {
+    return { setting: "layout", value };
+  }
+  if (command === "exhausted" && (value === "status" || value === "reset") && extra === undefined) {
+    return { setting: "exhaustedDisplay", value };
+  }
+  if (
+    command === "exhausted" &&
+    value === "label" &&
+    (extra === "full" || extra === "symbol") &&
+    tokens.length === 3
+  ) {
+    return { setting: "exhaustedLabel", value: extra };
+  }
+  if (
+    command === "provider" &&
+    value === "truncate" &&
+    extra !== undefined &&
+    tokens.length === 3 &&
+    /^\d+$/u.test(extra) &&
+    Number(extra) <= 256
+  ) {
+    return { setting: "providerLabelMaxColumns", value: Number(extra) };
+  }
+  return undefined;
 }
 
 export { IndicatorController, WIDGET_KEY } from "./runtime/controller.ts";
@@ -36,7 +122,7 @@ export default function subscriptionBurndownExtension(
 ): void {
   const controller = dependencies.controller ?? new IndicatorController();
   const readSettings = dependencies.readPluginSettings ?? defaultPluginSettings;
-  const persistWindowView = dependencies.persistWindowView ?? defaultPersistWindowView;
+  const persistSetting = dependencies.persistPluginSetting ?? defaultPersistPluginSetting;
 
   pi.on("session_start", async (_event, ctx) => {
     await controller.start(ctx, await readSettings(ctx));
@@ -54,26 +140,32 @@ export default function subscriptionBurndownExtension(
     controller.ingestResponse(event, ctx);
   });
 
-  pi.registerCommand("burndown-status", {
-    description: "Show subscription burndown source and freshness diagnostics",
-    handler: async (_args, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify(controller.status(), "info");
-    },
-  });
-
-  pi.registerCommand("burndown-view", {
-    description: "Set or cycle quota window view: hour, week, month, or all",
-    getArgumentCompletions(argumentPrefix: string) {
-      const prefix = argumentPrefix.trim().toLocaleLowerCase();
-      const items = WINDOW_VIEW_COMMAND_TOKENS.filter((token) => token.startsWith(prefix)).map(
-        (token) => ({ value: token, label: token }),
-      );
-      return items.length > 0 ? items : null;
-    },
+  pi.registerCommand("burndown", {
+    description: "Show or change subscription burndown display settings",
+    getArgumentCompletions: completions,
     handler: async (args, ctx) => {
-      const result = controller.applyWindowViewCommand(args);
-      if (result.changed) await persistWindowView(ctx.cwd, result.mode);
-      if (ctx.hasUI) ctx.ui.notify(result.detail, "info");
+      const normalized = args.trim();
+      if (normalized === "status") {
+        if (ctx.hasUI) ctx.ui.notify(controller.status(), "info");
+        return;
+      }
+
+      const [command, view] = normalized.toLocaleLowerCase().split(/\s+/u);
+      if (command === "view" && normalized.split(/\s+/u).length <= 2) {
+        const result = controller.applyWindowViewCommand(view ?? "");
+        if (result.changed) await persistSetting(ctx.cwd, "windowView", result.mode);
+        if (ctx.hasUI) ctx.ui.notify(result.detail, "info");
+        return;
+      }
+
+      const change = displayChange(normalized);
+      if (!change) {
+        if (ctx.hasUI) ctx.ui.notify(USAGE, "warning");
+        return;
+      }
+      await persistSetting(ctx.cwd, change.setting, change.value);
+      await controller.restart(ctx, await readSettings(ctx));
+      if (ctx.hasUI) ctx.ui.notify("Burndown display updated.", "info");
     },
   });
 }
