@@ -4,7 +4,7 @@ import { IndicatorController } from "./runtime/controller.ts";
 
 const PLUGIN_NAME = "omp-sub-burndown-indicator";
 const USAGE =
-  "Usage: /burndown status | view [hour|week|month|all] | labels <full|masked|provider-only> | density <dense|text> | layout <fit|wrap> | exhausted <status|reset|label <full|symbol>> | provider truncate <0-256>";
+  "Usage: /burndown status | view [hour|week|month|all] | labels <full|masked|provider-only> | density <dense|text> | layout <fit|wrap> | exhausted mode <status|reset> | exhausted label <full|symbol> | provider truncate <0-256>";
 
 type MutablePluginSetting =
   | "accountLabels"
@@ -58,8 +58,8 @@ function completions(argumentPrefix: string): Array<{ value: string; label: stri
               ? ["layout fit", "layout wrap"]
               : prefix.startsWith("exhausted ")
                 ? [
-                    "exhausted status",
-                    "exhausted reset",
+                    "exhausted mode status",
+                    "exhausted mode reset",
                     "exhausted label full",
                     "exhausted label symbol",
                   ]
@@ -90,8 +90,13 @@ function displayChange(
   if (command === "layout" && (value === "fit" || value === "wrap") && extra === undefined) {
     return { setting: "layout", value };
   }
-  if (command === "exhausted" && (value === "status" || value === "reset") && extra === undefined) {
-    return { setting: "exhaustedDisplay", value };
+  if (
+    command === "exhausted" &&
+    value === "mode" &&
+    (extra === "status" || extra === "reset") &&
+    tokens.length === 3
+  ) {
+    return { setting: "exhaustedDisplay", value: extra };
   }
   if (
     command === "exhausted" &&

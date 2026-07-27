@@ -97,11 +97,13 @@ test("default factory registers lifecycle, commands, and plugin-runtime persiste
 
   await commands.get("burndown")?.handler("labels masked", interactive.ctx);
   await commands.get("burndown")?.handler("provider truncate 8", interactive.ctx);
+  await commands.get("burndown")?.handler("exhausted mode reset", interactive.ctx);
   await commands.get("burndown")?.handler("exhausted label symbol", interactive.ctx);
   expect(persisted).toEqual([
     ["windowView", "week"],
     ["accountLabels", "masked"],
     ["providerLabelMaxColumns", 8],
+    ["exhaustedDisplay", "reset"],
     ["exhaustedLabel", "symbol"],
   ]);
 
@@ -111,6 +113,12 @@ test("default factory registers lifecycle, commands, and plugin-runtime persiste
     { value: "view week", label: "view week" },
     { value: "view month", label: "view month" },
     { value: "view all", label: "view all" },
+  ]);
+  expect(completions?.("exhausted ")).toEqual([
+    { value: "exhausted mode status", label: "exhausted mode status" },
+    { value: "exhausted mode reset", label: "exhausted mode reset" },
+    { value: "exhausted label full", label: "exhausted label full" },
+    { value: "exhausted label symbol", label: "exhausted label symbol" },
   ]);
   expect(completions?.("zz")).toBeNull();
 

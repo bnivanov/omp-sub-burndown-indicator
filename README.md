@@ -281,7 +281,7 @@ Run:
 /burndown labels <full|masked|provider-only>
 /burndown density <dense|text>
 /burndown layout <fit|wrap>
-/burndown exhausted <status|reset>
+/burndown exhausted mode <status|reset>
 /burndown exhausted label <full|symbol>
 /burndown provider truncate <0-256>
 ```
