@@ -1,4 +1,4 @@
-import type { ProviderResponseMetadata } from "@oh-my-pi/pi-ai";
+import { type ProviderResponseMetadata, resolveUsedFraction } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { isProviderEnabled } from "@oh-my-pi/pi-coding-agent/capability";
 import { type BurndownConfig, readConfig, redact } from "../config.ts";
@@ -8,6 +8,14 @@ import type {
   CoordinatorDiagnostic,
   SubscriptionSnapshot,
 } from "../domain/types.ts";
+import {
+  classifyWindow,
+  describeWindowViewMode,
+  nextWindowViewMode,
+  parseWindowViewMode,
+  type WindowViewMode,
+  windowClassLabel,
+} from "../domain/window-class.ts";
 import { BurndownRowComponent } from "../render/row.ts";
 import { mergeSnapshots, SourceCoordinator } from "../sources/coordinator.ts";
 import { OmpAuthStorageUsageSource } from "../sources/omp-auth-storage.ts";
@@ -75,6 +83,7 @@ export class IndicatorController {
   #renderTimer: Timer | undefined;
   #generation = 0;
   #disposed = false;
+  #windowView: WindowViewMode = "five_hour";
   #lastSegments: readonly BurndownSegment[] = [];
 
   constructor(options: IndicatorControllerOptions = {}) {
@@ -89,6 +98,51 @@ export class IndicatorController {
     return !this.#disposed && this.#loop?.active === true;
   }
 
+  get windowView(): WindowViewMode {
+    return this.#windowView;
+  }
+
+  /**
+   * Set the active window view and redraw from cached snapshots.
+   * Returns the applied mode.
+   */
+  setWindowView(mode: WindowViewMode): WindowViewMode {
+    this.#windowView = mode;
+    if (this.#config) this.#config = { ...this.#config, windowView: mode };
+    if (this.#ctx?.hasUI) this.#render(this.#currentSnapshots());
+    return mode;
+  }
+
+  /**
+   * Apply a slash-command token or cycle when args are empty.
+   * `status` leaves the mode unchanged.
+   */
+  applyWindowViewCommand(args: string): { mode: WindowViewMode; changed: boolean; detail: string } {
+    const token = (args.trim().split(/\s+/u)[0] ?? "").toLocaleLowerCase();
+    if (token === "status" || token === "?") {
+      return {
+        mode: this.#windowView,
+        changed: false,
+        detail: `Burndown view: ${describeWindowViewMode(this.#windowView)}`,
+      };
+    }
+    const parsed = token ? parseWindowViewMode(token) : undefined;
+    if (token && !parsed) {
+      return {
+        mode: this.#windowView,
+        changed: false,
+        detail: "Usage: /burndown view [hour|week|month|all]. Cycle with no mode.",
+      };
+    }
+    const next = parsed ?? nextWindowViewMode(this.#windowView);
+    const changed = next !== this.#windowView;
+    if (changed) this.setWindowView(next);
+    return {
+      mode: next,
+      changed,
+      detail: `Burndown view: ${describeWindowViewMode(next)}`,
+    };
+  }
   /** Start the current session. Repeated calls join the existing poller. */
   async start(
     ctx: ExtensionContext,
@@ -180,7 +234,7 @@ export class IndicatorController {
     };
   }
 
-  /** Human-readable output used by /burndown-status. It never contains credentials. */
+  /** Human-readable output used by /burndown status. It never contains credentials. */
   status(): string {
     const diagnostic = this.diagnostic();
     const sourceLines = diagnostic.sources.map((source) => {
@@ -199,15 +253,61 @@ export class IndicatorController {
     const unavailable = Object.entries(diagnostic.unavailableProviders).map(
       ([provider, reason]) => `${provider} (${reason})`,
     );
+    const windowLines = this.#windowDiagnosticLines();
     return [
       "Burndown status",
       `active: ${diagnostic.active}`,
+      `windowView: ${describeWindowViewMode(this.#windowView)}`,
       `sources: ${sourceLines.length > 0 ? sourceLines.join("; ") : "none"}`,
       `discovered: ${discovered}`,
       `reported: ${reported}`,
       `unavailable: ${unavailable.length > 0 ? unavailable.join("; ") : "none"}`,
       ...(diagnostic.configError ? [`configuration: ${errorText(diagnostic.configError)}`] : []),
+      "windows:",
+      ...(windowLines.length > 0 ? windowLines : ["  none"]),
     ].join("\n");
+  }
+
+  /** Secret-free per-limit classification dump for /burndown status. */
+  #windowDiagnosticLines(): string[] {
+    const lines: string[] = [];
+    for (const snapshot of this.#currentSnapshots()) {
+      const brand = snapshot.accountLabel
+        ? `${snapshot.provider}/${snapshot.accountLabel}`
+        : snapshot.provider;
+      if (snapshot.limits.length === 0) {
+        lines.push(`  ${brand}: no limits`);
+        continue;
+      }
+      for (const observation of snapshot.limits) {
+        const limit = observation.limit;
+        const window = limit.window;
+        const used = resolveUsedFraction(limit);
+        const windowClass = classifyWindow(limit);
+        const label = windowClassLabel(windowClass, window?.durationMs);
+        const parts = [
+          `id=${limit.id}`,
+          window?.id ? `windowId=${window.id}` : undefined,
+          window?.label ? `label=${window.label}` : undefined,
+          window?.durationMs !== undefined && Number.isFinite(window.durationMs)
+            ? `durationMs=${window.durationMs}`
+            : "durationMs=missing",
+          window?.resetsAt !== undefined && Number.isFinite(window.resetsAt)
+            ? `resetsAt=${window.resetsAt}`
+            : "resetsAt=missing",
+          used === undefined ? "used=missing" : `used=${used.toFixed(3)}`,
+          `class=${windowClass}`,
+          label ? `tag=${label}` : "tag=none",
+        ].filter((part): part is string => part !== undefined);
+        lines.push(`  ${brand}: ${parts.join(" ")}`);
+      }
+    }
+    for (const segment of this.#lastSegments) {
+      lines.push(
+        `  shown: ${segment.provider} id=${segment.subscriptionId} class=${segment.windowClass ?? "none"} tag=${segment.windowLabel ?? "none"} state=${segment.state}`,
+      );
+    }
+    return lines;
   }
 
   async #activate(
@@ -226,6 +326,7 @@ export class IndicatorController {
       this.#configError = errorText(error);
       this.#config = this.#options.config ?? readConfig({});
     }
+    this.#windowView = this.#config.windowView;
 
     const providers = modelProviders(ctx);
     const sources = this.#buildSources(ctx, providers);
@@ -295,6 +396,10 @@ export class IndicatorController {
               symbols: this.#config?.symbols ?? "auto",
               density: this.#config?.density ?? "dense",
               layout: this.#config?.layout ?? "fit",
+              accountLabels: this.#config?.accountLabels ?? "full",
+              exhaustedDisplay: this.#config?.exhaustedDisplay ?? "status",
+              exhaustedLabel: this.#config?.exhaustedLabel ?? "full",
+              providerLabelMaxColumns: this.#config?.providerLabelMaxColumns ?? 0,
               showReset: this.#config?.showReset ?? true,
             });
             this.#component.setSegments(this.#lastSegments);
@@ -323,8 +428,11 @@ export class IndicatorController {
   #currentSnapshots(): SubscriptionSnapshot[] {
     const coordinatorSnapshots = this.#coordinator?.current() ?? [];
     const responseSnapshots = this.#responseSource?.current() ?? [];
-    return mergeSnapshots([coordinatorSnapshots, responseSnapshots]).filter((snapshot) =>
-      isProviderEnabled(snapshot.provider),
+    const providerFilter = this.#config?.providerFilter;
+    return mergeSnapshots([coordinatorSnapshots, responseSnapshots]).filter(
+      (snapshot) =>
+        isProviderEnabled(snapshot.provider) &&
+        (!providerFilter || providerFilter.has(snapshot.provider.toLocaleLowerCase())),
     );
   }
 
@@ -336,6 +444,7 @@ export class IndicatorController {
       paceTolerance: config.paceTolerance,
       staleAfterMs: config.staleAfterMs,
       clockSkewMs: config.clockSkewMs,
+      windowView: this.#windowView,
     });
     this.#lastSegments = segments;
     if (!this.#component?.setSegments(segments)) return;
@@ -382,5 +491,3 @@ export class IndicatorController {
     this.#tui = undefined;
   }
 }
-
-export const IndicatorRuntime = IndicatorController;

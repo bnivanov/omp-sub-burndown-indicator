@@ -18,6 +18,11 @@ const config: BurndownConfig = {
   symbols: "ascii",
   density: "dense",
   layout: "fit",
+  windowView: "five_hour",
+  accountLabels: "full",
+  exhaustedDisplay: "status",
+  exhaustedLabel: "full",
+  providerLabelMaxColumns: 0,
   showReset: false,
   clockSkewMs: 0,
 };
@@ -36,6 +41,53 @@ function snapshot(usedFraction = 0.25, fetchedAt = now): SubscriptionSnapshot {
           scope: { provider: "anthropic", accountId: "acct" },
           window: { id: "short", label: "Short", durationMs: 10_000, resetsAt: 15_000 },
           amount: { unit: "percent", usedFraction },
+        },
+        measurementSource: "omp-broker",
+        fetchedAt,
+        stale: false,
+      },
+    ],
+  };
+}
+
+function dualWindowSnapshot(fetchedAt = now): SubscriptionSnapshot {
+  const hour = 60 * 60 * 1_000;
+  const day = 24 * hour;
+  return {
+    id: "kimi-code:account:acct",
+    provider: "kimi-code",
+    accountLabel: "Kimi",
+    identitySource: "omp-broker",
+    limits: [
+      {
+        limit: {
+          id: "5h",
+          label: "5 Hour",
+          scope: { provider: "kimi-code", accountId: "acct", windowId: "5h" },
+          window: {
+            id: "5h",
+            label: "5 Hour",
+            durationMs: 5 * hour,
+            resetsAt: now + 2 * hour + 28 * 60_000,
+          },
+          amount: { unit: "percent", usedFraction: 0 },
+        },
+        measurementSource: "omp-broker",
+        fetchedAt,
+        stale: false,
+      },
+      {
+        limit: {
+          id: "7d",
+          label: "Weekly",
+          scope: { provider: "kimi-code", accountId: "acct", windowId: "7d" },
+          window: {
+            id: "7d",
+            label: "Weekly",
+            durationMs: 7 * day,
+            resetsAt: now + 2 * day + 7 * hour + 25 * 60_000,
+          },
+          amount: { unit: "percent", usedFraction: 0.12 },
         },
         measurementSource: "omp-broker",
         fetchedAt,
@@ -106,9 +158,9 @@ test("controller installs one above-editor width-aware row and clears on shutdow
       theme: { fg(_color: string, text: string): string },
     ) => { render(width: number): readonly string[] }
   )({ requestRender: () => state.renders++ }, { fg: (_color, text) => text });
-  const rows = component.render(12);
+  const rows = component.render(20);
   expect(rows).toHaveLength(1);
-  expect(visibleWidth(rows[0] ?? "")).toBeLessThanOrEqual(12);
+  expect(visibleWidth(rows[0] ?? "")).toBeLessThanOrEqual(20);
   controller.shutdown(ctx);
   expect(state.cleared).toBe(true);
 });
@@ -138,6 +190,92 @@ test("controller propagates plugin density into the row component", async () => 
   )({ requestRender: () => state.renders++ }, { fg: (_color, text) => text });
   expect(denseComponent.render(100).join("")).toContain("▲25pp");
   controller.shutdown(ctx);
+});
+
+test("window view command redraws cached dual-window segments without refresh", async () => {
+  const state: FakeUiState = { cleared: false, renders: 0 };
+  const ctx = fakeContext(state);
+  let refreshCount = 0;
+  const source: UsageSource = {
+    id: "omp-broker",
+    refresh: async () => {
+      refreshCount += 1;
+      return [dualWindowSnapshot()];
+    },
+  };
+  const controller = new IndicatorController({
+    config,
+    now: () => now,
+    sources: [source],
+  });
+  await controller.start(ctx);
+  expect(refreshCount).toBe(1);
+
+  const component = (
+    state.content as (
+      tui: { requestRender(): void },
+      theme: { fg(_color: string, text: string): string },
+    ) => { render(width: number): readonly string[] }
+  )({ requestRender: () => state.renders++ }, { fg: (_color, text) => text });
+
+  const initial = component.render(300).join(" · ");
+  expect(initial).toContain("Kimi Code 5h");
+  expect(initial).not.toContain("Kimi Code Wk");
+
+  const week = controller.applyWindowViewCommand("week");
+  expect(week.changed).toBe(true);
+  expect(week.mode).toBe("week");
+  expect(week.detail).toContain("week");
+  expect(refreshCount).toBe(1);
+  const weekRow = component.render(300).join(" · ");
+  expect(weekRow).toContain("Kimi Code Wk");
+  expect(weekRow).toContain("88% left");
+  expect(weekRow).not.toContain("Kimi Code 5h");
+
+  const hour = controller.applyWindowViewCommand("hour");
+  expect(hour.mode).toBe("five_hour");
+  expect(hour.detail).toContain("hour");
+  expect(refreshCount).toBe(1);
+  expect(component.render(300).join(" · ")).toContain("Kimi Code 5h");
+
+  const all = controller.applyWindowViewCommand("all");
+  expect(all.mode).toBe("all");
+  expect(all.detail).toContain("all");
+  expect(refreshCount).toBe(1);
+  const allRow = component.render(300).join("");
+  expect(allRow).toContain("Kimi Code 5h");
+  expect(allRow).toContain("Kimi Code Wk");
+  expect(allRow.indexOf("Kimi Code 5h")).toBeLessThan(allRow.indexOf("Kimi Code Wk"));
+
+  controller.shutdown(ctx);
+});
+
+test("window view command cycles, reports status, and rejects unknown tokens", () => {
+  const controller = new IndicatorController({ config });
+  expect(controller.windowView).toBe("five_hour");
+
+  // No-arg cycling: hour → week → month → all → hour
+  const cycle: Array<string> = [];
+  for (let i = 0; i < 5; i++) cycle.push(controller.applyWindowViewCommand("").mode);
+  expect(cycle).toEqual(["week", "month", "all", "five_hour", "week"]);
+
+  // Status does not change the mode, and is case-insensitive.
+  const status = controller.applyWindowViewCommand("STATUS");
+  expect(status.mode).toBe("week");
+  expect(status.changed).toBe(false);
+  expect(status.detail).toContain("Burndown view: week");
+  expect(controller.applyWindowViewCommand("?").changed).toBe(false);
+
+  // Mixed-case mode tokens parse like lowercase.
+  expect(controller.applyWindowViewCommand("MONTH").mode).toBe("month");
+  expect(controller.applyWindowViewCommand("All").mode).toBe("all");
+  expect(controller.applyWindowViewCommand("HOUR").mode).toBe("five_hour");
+
+  // Unknown tokens keep the mode and return usage text.
+  const invalid = controller.applyWindowViewCommand("nope");
+  expect(invalid.mode).toBe("five_hour");
+  expect(invalid.changed).toBe(false);
+  expect(invalid.detail).toContain("Usage: /burndown view");
 });
 
 test("headless startup performs no source work or widget calls", async () => {

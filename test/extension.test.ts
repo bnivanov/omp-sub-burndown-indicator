@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import subscriptionBurndownExtension from "../src/index.ts";
-import { WIDGET_KEY } from "../src/runtime/controller.ts";
+import { type IndicatorController, WIDGET_KEY } from "../src/runtime/controller.ts";
 
 type Handler = (
   event: { type: string; headers?: Record<string, string>; status?: number },
@@ -11,6 +11,7 @@ type Handler = (
 function fakeContext(hasUI: boolean) {
   const widgets: Array<{ key: string; content: unknown; placement?: string }> = [];
   const notifications: string[] = [];
+  const notificationLevels: string[] = [];
   const model = { provider: "anthropic", id: "claude" };
   const ctx = {
     cwd: process.cwd(),
@@ -30,28 +31,46 @@ function fakeContext(hasUI: boolean) {
           ...(options?.placement ? { placement: options.placement } : {}),
         });
       },
-      notify: (message: string) => notifications.push(message),
+      notify: (message: string, level?: string) => {
+        notifications.push(message);
+        notificationLevels.push(level ?? "info");
+      },
     },
   } as unknown as ExtensionContext;
-  return { ctx, widgets, notifications };
+  return { ctx, widgets, notifications, notificationLevels };
 }
 
-test("default factory registers public lifecycle, response, and diagnostic contracts", async () => {
+test("default factory registers lifecycle, commands, and plugin-runtime persistence", async () => {
   const handlers = new Map<string, Handler>();
-  let command:
-    | { name: string; handler: (args: string, ctx: ExtensionContext) => Promise<void> }
-    | undefined;
+  const commands = new Map<
+    string,
+    {
+      name: string;
+      handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+      getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
+    }
+  >();
   const api = {
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     registerCommand: (
       name: string,
-      options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> },
+      options: {
+        handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+        getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
+      },
     ) => {
-      command = { name, handler: options.handler };
+      commands.set(name, { name, ...options });
     },
   } as unknown as ExtensionAPI;
-
-  subscriptionBurndownExtension(api);
+  const settings: Record<string, unknown> = {};
+  const persisted: Array<[string, string | number]> = [];
+  subscriptionBurndownExtension(api, {
+    readPluginSettings: async () => settings,
+    persistPluginSetting: async (_cwd, setting, value) => {
+      persisted.push([setting, value]);
+      settings[setting] = value;
+    },
+  });
   expect([...handlers.keys()].sort()).toEqual([
     "after_provider_response",
     "session_shutdown",
@@ -59,7 +78,7 @@ test("default factory registers public lifecycle, response, and diagnostic contr
     "session_switch",
     "session_tree",
   ]);
-  expect(command?.name).toBe("burndown-status");
+  expect([...commands.keys()]).toEqual(["burndown"]);
 
   const interactive = fakeContext(true);
   await handlers.get("session_start")?.({ type: "session_start" }, interactive.ctx);
@@ -68,10 +87,102 @@ test("default factory registers public lifecycle, response, and diagnostic contr
   expect(installed?.placement).toBe("aboveEditor");
   expect(typeof installed?.content).toBe("function");
 
-  await command?.handler("", interactive.ctx);
+  await commands.get("burndown")?.handler("", interactive.ctx);
   expect(interactive.notifications[0]).toContain("Burndown status");
+  expect(interactive.notifications[0]).toContain("windowView:");
+
+  await commands.get("burndown")?.handler("view week", interactive.ctx);
+  expect(interactive.notifications.at(-1)).toContain("Burndown view: week");
+  expect(persisted).toEqual([["windowView", "week"]]);
+
+  await commands.get("burndown")?.handler("labels masked", interactive.ctx);
+  await commands.get("burndown")?.handler("provider truncate 8", interactive.ctx);
+  await commands.get("burndown")?.handler("exhausted mode reset", interactive.ctx);
+  await commands.get("burndown")?.handler("exhausted label symbol", interactive.ctx);
+  expect(persisted).toEqual([
+    ["windowView", "week"],
+    ["accountLabels", "masked"],
+    ["providerLabelMaxColumns", 8],
+    ["exhaustedDisplay", "reset"],
+    ["exhaustedLabel", "symbol"],
+  ]);
+
+  const completions = commands.get("burndown")?.getArgumentCompletions;
+  expect(completions?.("view ")).toEqual([
+    { value: "view hour", label: "view hour" },
+    { value: "view week", label: "view week" },
+    { value: "view month", label: "view month" },
+    { value: "view all", label: "view all" },
+  ]);
+  expect(completions?.("exhausted ")).toEqual([
+    { value: "exhausted mode status", label: "exhausted mode status" },
+    { value: "exhausted mode reset", label: "exhausted mode reset" },
+    { value: "exhausted label full", label: "exhausted label full" },
+    { value: "exhausted label symbol", label: "exhausted label symbol" },
+  ]);
+  expect(completions?.("zz")).toBeNull();
+
+  await commands.get("burndown")?.handler("labels hidden", interactive.ctx);
+  expect(interactive.notifications.at(-1)).toContain("Usage: /burndown");
+
   await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, interactive.ctx);
   expect(interactive.widgets.at(-1)?.content).toBeUndefined();
+});
+
+test("persistence failures keep view and display changes active for the session", async () => {
+  const handlers = new Map<string, Handler>();
+  const commands = new Map<
+    string,
+    { handler: (args: string, ctx: ExtensionContext) => Promise<void> }
+  >();
+  const restarts: Array<Readonly<Record<string, unknown>> | undefined> = [];
+  let windowView = "five_hour";
+  const controller = {
+    start: async () => undefined,
+    restart: async (_ctx: ExtensionContext, settings?: Readonly<Record<string, unknown>>) => {
+      restarts.push(settings);
+      if (settings?.windowView) windowView = String(settings.windowView);
+    },
+    shutdown: () => undefined,
+    ingestResponse: () => undefined,
+    status: () => `windowView: ${windowView}`,
+    applyWindowViewCommand: (args: string) => {
+      if (args === "week") {
+        windowView = "week";
+        return { mode: "week" as const, changed: true, detail: "Burndown view: week" };
+      }
+      return { mode: "five_hour" as const, changed: false, detail: "Burndown view: five_hour" };
+    },
+  } as unknown as IndicatorController;
+  const api = {
+    on: (event: string, handler: Handler) => handlers.set(event, handler),
+    registerCommand: (
+      name: string,
+      options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> },
+    ) => commands.set(name, options),
+  } as unknown as ExtensionAPI;
+  const interactive = fakeContext(true);
+  subscriptionBurndownExtension(api, {
+    controller,
+    readPluginSettings: async () => ({ layout: "fit", windowView: "five_hour" }),
+    persistPluginSetting: async () => {
+      throw new Error("settings directory unavailable");
+    },
+  });
+
+  await commands.get("burndown")?.handler("view week", interactive.ctx);
+  expect(windowView).toBe("week");
+  expect(interactive.notifications.at(-1)).toBe(
+    "Burndown view changed for this session only; unable to persist setting.",
+  );
+  expect(interactive.notificationLevels.at(-1)).toBe("warning");
+
+  await commands.get("burndown")?.handler("layout wrap", interactive.ctx);
+  expect(restarts.at(-1)).toEqual({ layout: "wrap", windowView: "five_hour" });
+  expect(interactive.notifications.at(-1)).toBe(
+    "Burndown display updated for this session only; unable to persist setting.",
+  );
+  expect(interactive.notificationLevels.at(-1)).toBe("warning");
 });
 
 test("headless and component-stubbing hosts degrade without throwing", async () => {
@@ -80,7 +191,10 @@ test("headless and component-stubbing hosts degrade without throwing", async () 
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     registerCommand: () => undefined,
   } as unknown as ExtensionAPI;
-  subscriptionBurndownExtension(api);
+  subscriptionBurndownExtension(api, {
+    readPluginSettings: async () => ({}),
+    persistPluginSetting: async () => undefined,
+  });
 
   const headless = fakeContext(false);
   await handlers.get("session_start")?.({ type: "session_start" }, headless.ctx);

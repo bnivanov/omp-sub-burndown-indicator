@@ -1,4 +1,5 @@
 import type { UsageLimit } from "@oh-my-pi/pi-ai";
+import type { WindowClass } from "./window-class.ts";
 
 export type UsageSourceId =
   | "omp-auth-storage"
@@ -35,6 +36,10 @@ export interface BurndownSegment {
   tier?: string;
   label: string;
   windowId?: string;
+  /** Exact semantic class of the selected window (5h / week / month / other). */
+  windowClass?: WindowClass;
+  /** Display suffix such as 5h, Wk, Mo, or a real other duration tag. */
+  windowLabel?: string;
   resetsAt?: number;
   usedFraction?: number;
   elapsedFraction?: number;

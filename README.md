@@ -3,22 +3,35 @@
 Keep an eye on your AI subscription allowances while you work. This standalone [Oh My Pi](https://omp.sh) extension places a compact status line immediately above the interactive editor, so you can see whether each provider's quota is being consumed sustainably before it resets. Complete segments wrap onto later indicator lines when space runs out; they are never split.
 
 ```text
-Anthropic ▲12pp · OpenAI Codex ▼4pp · Google Gemini =0pp
+Anthropic 5h ▲12pp · OpenAI Codex Wk ▼4pp · Google Gemini Mo =0pp
 ```
 
-At a glance, a segment shows whether usage is ahead of or behind a steady consumption pace for its reset window. The number is the rounded difference, in percentage points, between elapsed time and consumed quota:
+Each segment selects one **semantic quota window** from the subscription's usage report. Exact classes are recognized:
+
+- **5h** — duration near five hours, or an explicit 5h / rolling-5h id/label when duration is absent
+- **Wk** — duration near seven days, or an explicit weekly / 7d id/label when duration is absent; Kimi's durationless plan summary (`default` / "Usage window" / "Total quota") also classifies as the weekly quota
+- **Mo** — duration near thirty days, or an explicit monthly id/label when duration is absent
+
+Unrecognized windows keep their real duration tag (for example `1h` or `2d`) and never inherit a false `5h` / `Wk` / `Mo` suffix. Within a class, matching nominal windows prefer the limit furthest behind pace so an unused parallel bucket cannot hide an overused one. The number is the rounded difference, in percentage points, between elapsed time and consumed quota:
 
 ```text
 pace delta = elapsed fraction - used fraction
 ```
 
-`▲12pp` means usage is 12 percentage points below the linear consumption pace, so the quota is currently safe; `▼4pp` means it is 4 percentage points over pace. This is deliberately not the provider's `% used` or `% free`: the full form separately shows rounded remaining quota and the reset countdown. An exhausted quota always renders as exhausted regardless of its calculated delta.
+For example, `▲12pp` means usage is 12 percentage points below the linear consumption pace, so the quota is currently safe. `▼4pp` means usage is 4 percentage points over pace. This pace value is deliberately not the provider's `% used` or `% free`; the full form separately displays rounded remaining quota and the reset countdown. An exhausted quota always renders as exhausted regardless of its calculated delta. Durationless rows that still classify as a semantic window — such as GitHub Copilot's monthly quota or Kimi's weekly plan summary — compute pace from the canonical 5h / 7d / 30d duration when a reset timestamp is present. Rows with a duration but no reset (some providers' 5h buckets) show `% left` without a pace glyph, because elapsed time in the window cannot be known without a reset.
 
 Every segment starts with the complete provider brand. The account identifier is omitted when that provider has exactly one account; it is shown only when two or more accounts for the same provider must be distinguished. Required account labels remain complete, including their full email or account text. A true same-provider label collision uses an explicit ordinal such as `hi@adamgradzki.com#2`.
 
 ## How quota windows are selected
 
-For each subscription, the extension selects the eligible reported window with the shortest positive duration across distinct nominal windows. If multiple limits report the same nominal window—such as independent 7-day quota buckets—it chooses the one furthest behind pace, so an unused parallel bucket cannot hide an overused one.
+Each subscription can report multiple quota windows. The indicator classifies them into exact semantic classes (`5h`, `Wk`, `Mo`, or a real other duration tag) and selects which ones to show from the active `windowView` setting:
+
+- **hour / 5h** — prefer the 5h class; fall back through week → month → other
+- **week** — prefer week; fall back through 5h → month → other
+- **month** — prefer month; fall back through week → 5h → other
+- **all** — emit every present 5h / week / month class, plus one segment per distinct non-semantic window
+
+Within a class, matching nominal windows prefer the limit furthest behind pace, so an unused parallel bucket cannot hide an overused one. Change the view with `/burndown view`.
 
 ## Requirements
 
@@ -85,7 +98,7 @@ Independent quota tiers are separate subscriptions under their stable base accou
 
 The extension calls the public `ctx.modelRegistry.authStorage.fetchUsageReports()` API—the same normalized, cached report path used by OMP's built-in `/usage` command. No duplicate credentials or broker configuration are required. Account IDs and email labels come from OMP's normalized report metadata; credential values are never returned to the extension.
 
-A single report without account scope keeps the provisional `provider:<provider>` identity described below. When OMP returns several reports for one provider with no stable account identity—for example, multiple API-key credentials stored without account scope, as with OpenCode Go—usage cannot be attributed to a particular account. The provider then renders as one `Provider ? unknown` segment instead of being hidden, so the indicator never silently shows fewer subscriptions than `/usage`; `/burndown-status` reports how many reports were unattributable. The placeholder carries no measurements and is replaced as soon as an identified report or provisional header snapshot exists for the provider.
+A single report without account scope keeps the provisional `provider:<provider>` identity described below. When OMP returns several reports for one provider with no stable account identity—for example, multiple API-key credentials stored without account scope, as with OpenCode Go—usage cannot be attributed to a particular account. The provider then renders as one `Provider ? unknown` segment instead of being hidden, so the indicator never silently shows fewer subscriptions than `/usage`; `/burndown status` reports how many reports were unattributable. The placeholder carries no measurements and is replaced as soon as an identified report or provisional header snapshot exists for the provider.
 
 ### 2. OMP auth broker or gateway
 
@@ -157,42 +170,66 @@ A direct report must expose a stable account, project, organization, or explicit
 | `OMP_SUB_BURNDOWN_SYMBOLS` | `auto` | `auto`, `unicode`, or `ascii` |
 | `OMP_SUB_BURNDOWN_SHOW_RESET` | `true` | `true` or `false` |
 
-The environment variables in this table remain the configuration surface for refresh, source/transport, and other runtime and rendering options. Numeric and enum values are validated before I/O.
+The environment variables above configure refresh and source behavior. The display
+overrides below take precedence over the matching OMP plugin runtime setting without
+rewriting it:
 
-Display density is stored only in OMP's user-wide plugin runtime configuration
-(normally `~/.omp/plugins/omp-plugins.lock.json`), never in an environment
-variable. Compact/dense output is the default. OMP's `plugin config` command
-does not currently address marketplace installs; to restore verbose text, add
-the following entry to the runtime configuration file's existing `settings`
-object, then restart OMP:
+| Variable | Default | Accepted values |
+| --- | ---: | --- |
+| `OMP_SUB_BURNDOWN_DENSITY` | `dense` | `dense` or `text` |
+| `OMP_SUB_BURNDOWN_WINDOW_VIEW` | `five_hour` | `five_hour`, `week`, `month`, or `all` |
+| `OMP_SUB_BURNDOWN_LAYOUT` | `fit` | `fit` or `wrap` |
+| `OMP_SUB_BURNDOWN_ACCOUNT_LABELS` | `full` | `full`, `masked`, or `provider-only` |
+| `OMP_SUB_BURNDOWN_EXHAUSTED_DISPLAY` | `status` | `status` or `reset` |
+| `OMP_SUB_BURNDOWN_EXHAUSTED_LABEL` | `full` | `full` or `symbol` |
+| `OMP_SUB_BURNDOWN_PROVIDER_LABEL_MAX_COLUMNS` | `0` | integer 0 through 256; `0` disables clipping |
+| `OMP_SUB_BURNDOWN_PROVIDERS` | unset | comma-separated provider IDs |
 
-```json
-{
-  "omp-sub-burndown-indicator": {
-    "density": "text"
-  }
-}
-```
-
-With the default compact output, `▼4 points behind` becomes `▼4pp`, retaining the direction glyph. The text setting restores `▼4 points behind`; ahead and on-pace signals likewise use `▲12pp` and `=0pp` in compact output or their full text forms when text is selected. Exhausted and unknown behavior, along with existing width fallback forms, is unchanged.
-
-Indicator layout is stored in the same runtime configuration file. The default
-`fit` layout keeps every subscription on one indicator line, degrading pace
-signals and dropping `% left` and reset details when width runs out. The
-`wrap` layout keeps full details and moves whole segments to subsequent
-indicator lines as width allows:
+Display settings are stored in OMP's user-wide plugin runtime configuration
+(normally `~/.omp/plugins/omp-plugins.lock.json`). Compact/dense output is the
+default. The default window view is `five_hour` (prefer the 5h class, then fall back
+through week → month → other). Add entries to the runtime configuration file's
+existing `settings` object, then restart OMP:
 
 ```json
 {
   "omp-sub-burndown-indicator": {
-    "layout": "wrap"
+    "density": "text",
+    "windowView": "all",
+    "layout": "wrap",
+    "accountLabels": "masked",
+    "exhaustedDisplay": "reset",
+    "exhaustedLabel": "symbol",
+    "providerLabelMaxColumns": 16
   }
 }
 ```
 
-A segment degrades to shorter forms only when its full form cannot fit an
-otherwise empty line; segments whose minimal form cannot fit the current width
-are still omitted. Risk ordering is unchanged.
+| `windowView` | Behavior |
+| --- | --- |
+| `five_hour` | Prefer 5h; if absent show week, then month, then other |
+| `week` | Prefer week; if absent show 5h, then month, then other |
+| `month` | Prefer month; if absent show week, then 5h, then other |
+| `all` | Emit every present 5h / week / month class for each subscription, plus one segment per distinct non-semantic window (labeled with real duration tags such as `1h`, `2d`) |
+
+In single-class modes the segment still carries the class that was actually selected, so a weekly-only Codex account renders as `OpenAI Codex Wk …` even while the view is `five_hour`. In `all` mode one account can contribute multiple segments (`Kimi Code 5h … · Kimi Code Wk …`); account groups stay contiguous and windows inside a group keep canonical order `5h → Wk → Mo`.
+
+With the default compact output, `▼4 points behind` becomes `▼4pp`, retaining the
+direction glyph. The text setting restores `▼4 points behind`; ahead and on-pace
+signals likewise use `▲12pp` and `=0pp` in compact output or their full text forms
+when text is selected. `masked` account labels preserve a short local-part hint
+(`work@example.invalid` becomes `wor***`); accounts whose hints collide keep the
+usual `#2` ordinal so they stay distinguishable, while `provider-only` hides the
+account identifier entirely. `exhaustedDisplay: reset` omits remaining quota, and
+`exhaustedLabel: symbol` renders `!` without `exhausted`. Window-class suffixes
+(`5h` / `Wk` / `Mo` / real duration tags) stay on every width tier, including the
+minimal form, so dual-window accounts remain distinguishable under pressure.
+
+The default `fit` layout keeps every subscription on one indicator line, degrading
+pace signals and dropping `% left` and reset details when width runs out. The `wrap`
+layout keeps full details and moves whole segments to subsequent indicator lines.
+**Multi-window views (`/burndown view all`) are much more readable with `wrap`**,
+because `fit` will still crush detail to pack more segments onto each line.
 
 
 ## Symbols and ordering
@@ -229,15 +266,34 @@ Width pressure preserves provider and required account names in full. Each compl
 
 Provider names use complete readable brands (`Anthropic`, `OpenAI Codex`, `Google Gemini`) instead of internal provider IDs and remain verbatim at every width. The renderer measures visible terminal cells, including ANSI and wide Unicode handling. It emits zero or more indicator lines, each within the available width. If no meaningful direction and magnitude fit, it emits no indicator.
 
-## Diagnostics
+## Diagnostics and display controls
 
 Run:
 
 ```text
-/burndown-status
+/burndown
+/burndown status
+/burndown view
+/burndown view hour
+/burndown view week
+/burndown view month
+/burndown view all
+/burndown labels <full|masked|provider-only>
+/burndown density <dense|text>
+/burndown layout <fit|wrap>
+/burndown exhausted mode <status|reset>
+/burndown exhausted label <full|symbol>
+/burndown provider truncate <0-256>
 ```
 
-The command reports enabled sources, last successful refresh, error category, discovered providers, reported providers, and why a provider is unavailable. In a normal interactive OMP session, `omp-auth-storage` should be enabled and report the same providers as `/usage`. Tokens, authorization headers, raw error bodies, URL credentials, and provider secrets are never included.
+`/burndown` (or `/burndown status`) reports the active window view, enabled sources,
+last successful refresh, error category, discovered providers, reported providers, and
+why a provider is unavailable. It never contains credentials. `/burndown view` with no
+mode cycles `hour → week → month → all`; an explicit mode sets the view immediately.
+Every mutating command applies immediately and attempts to persist its setting through OMP's plugin runtime settings; a persistence failure leaves the change active only for the current session.
+Restart OMP after installing or linking a new plugin version,
+because slash commands register only at extension load.
+
 
 ## Host modes
 
@@ -268,7 +324,7 @@ Providers without an OMP usage adapter or a complete upstream quota window remai
 
 ### No row appears
 
-1. Run `/burndown-status`.
+1. Run `/burndown status`.
 2. Confirm a complete broker pair or one supported direct credential is present in the OMP process environment.
 3. Confirm the report has a finite reset timestamp, a positive duration, and resolvable used fraction.
 4. Remember that provider discovery from `ctx.models.list()` does not grant credential or quota access.
@@ -297,7 +353,7 @@ Manual interactive smoke test with OMP authenticated providers:
 
 1. Install or link the plugin.
 2. Start interactive `omp` and confirm the subscription indicator appears directly above the editor.
-3. Run `/usage`, then `/burndown-status`; confirm `omp-auth-storage` is enabled and the reported providers match eligible `/usage` providers.
+3. Run `/usage`, then `/burndown status`; confirm `omp-auth-storage` is enabled and the reported providers match eligible `/usage` providers.
 4. Resize to narrow and wide terminal widths; confirm complete segments remain whole, retain risk order, and move to subsequent indicator lines when needed; segments whose full-name minimal-signal form cannot fit are omitted rather than summarized by a hidden-count marker.
 5. Switch themes; confirm semantic glyphs remain readable with and without color.
 6. Change the fake or real usage response and confirm the indicator refreshes.

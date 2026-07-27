@@ -10,6 +10,7 @@ const PROVIDER_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   llamacpp: "llama.cpp",
   "openai-codex": "OpenAI Codex",
   "opencode-go": "OpenCode Go",
+  "xai-oauth": "Xai Oauth",
   zai: "Z.ai",
 };
 
@@ -53,11 +54,23 @@ function displayName(segment: LabelSegment): string {
   return clean(segment.label) || clean(segment.accountLabel) || clean(segment.provider) || "?";
 }
 
+/** Preserve a small account hint without disclosing its domain. */
+function maskAccountLabel(value: string): string {
+  const localPart = clean(value).split("@", 1)[0] || "?";
+  return `${[...localPart].slice(0, 3).join("")}***`;
+}
+
 /**
  * Allocate stable labels. Collisions are disambiguated in stable-id order, so
  * reordering a source response cannot change a subscription's label.
+ *
+ * Masking runs before disambiguation so two accounts sharing a masked prefix
+ * still resolve to distinct labels.
  */
-export function buildStableLabels(segments: readonly LabelSegment[]): StableLabels {
+export function buildStableLabels(
+  segments: readonly LabelSegment[],
+  maskAccounts = false,
+): StableLabels {
   const ordered = [...segments].sort((a, b) => a.subscriptionId.localeCompare(b.subscriptionId));
   const providerAccounts = new Map<string, Set<string>>();
   for (const segment of ordered) {
@@ -75,7 +88,8 @@ export function buildStableLabels(segments: readonly LabelSegment[]): StableLabe
   const accountRequired = new Set<string>();
 
   for (const segment of ordered) {
-    const name = displayName(segment);
+    const raw = displayName(segment);
+    const name = maskAccounts ? maskAccountLabel(raw) : raw;
     const providerKey = clean(segment.provider).toLocaleLowerCase();
     const accountKey = clean(segment.accountId) || segment.subscriptionId;
     const provider = providerDisplayName(segment.provider, segment.tier);
@@ -99,9 +113,6 @@ export function buildStableLabels(segments: readonly LabelSegment[]): StableLabe
   }
   return { full, providerFull, accountRequired };
 }
-
-/** Alias retained as the natural imperative name for callers. */
-export const assignStableLabels = buildStableLabels;
 
 export function labelFor(labels: StableLabels, subscriptionId: string): string {
   return labels.full.get(subscriptionId) ?? "?";
