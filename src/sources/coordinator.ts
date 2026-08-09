@@ -7,6 +7,7 @@ import type {
 import type { UsageSource } from "./source.ts";
 
 const IDENTITY_RANK: Record<UsageSourceId, number> = {
+  "opencode-go-console": 5,
   "omp-auth-storage": 4,
   "omp-broker": 3,
   "provider-endpoint": 2,
@@ -16,6 +17,36 @@ const IDENTITY_RANK: Record<UsageSourceId, number> = {
 function observationKey(observation: LimitObservation): string {
   const windowId = observation.limit.window?.id ?? observation.limit.scope.windowId ?? "";
   return `${observation.limit.id}\u0000${windowId}`;
+}
+
+/**
+ * Exact opencode-go console observations outrank OMP's synthetic
+ * `omp-observed-request-costs` estimate for the same provider — but only while
+ * fresh. When the console session lapses and its data decays to stale, the
+ * synthetic estimate takes over again instead of rendering a dead number.
+ */
+function applyConsolePrecedence(snapshots: SubscriptionSnapshot[]): SubscriptionSnapshot[] {
+  const byProvider = new Map<string, SubscriptionSnapshot[]>();
+  for (const snapshot of snapshots) {
+    const group = byProvider.get(snapshot.provider);
+    if (group) group.push(snapshot);
+    else byProvider.set(snapshot.provider, [snapshot]);
+  }
+  const dropped = new Set<SubscriptionSnapshot>();
+  for (const group of byProvider.values()) {
+    const consoleSnapshots = group.filter(
+      (snapshot) => snapshot.identitySource === "opencode-go-console",
+    );
+    if (consoleSnapshots.length === 0) continue;
+    const others = group.filter((snapshot) => snapshot.identitySource !== "opencode-go-console");
+    const consoleFresh = consoleSnapshots.some((snapshot) =>
+      snapshot.limits.some((limit) => !limit.stale),
+    );
+    const othersFresh = others.some((snapshot) => snapshot.limits.some((limit) => !limit.stale));
+    if (consoleFresh) for (const snapshot of others) dropped.add(snapshot);
+    else if (othersFresh) for (const snapshot of consoleSnapshots) dropped.add(snapshot);
+  }
+  return snapshots.filter((snapshot) => !dropped.has(snapshot));
 }
 
 export function mergeSnapshots(groups: readonly SubscriptionSnapshot[][]): SubscriptionSnapshot[] {
@@ -59,7 +90,7 @@ export function mergeSnapshots(groups: readonly SubscriptionSnapshot[][]): Subsc
       });
     }
   }
-  const snapshots = [...merged.values()];
+  const snapshots = applyConsolePrecedence([...merged.values()]);
   const identifiedProviders = new Set(
     snapshots
       .filter((snapshot) => snapshot.provisional !== true)

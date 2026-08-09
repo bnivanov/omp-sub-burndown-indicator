@@ -1,6 +1,6 @@
 {
   "name": "omp-sub-burndown-indicator",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "One-line subscription quota burndown indicator for Oh My Pi",
   "type": "module",
   "license": "MIT",
@@ -83,6 +83,15 @@
         "type": "number",
         "description": "Maximum provider-label width in terminal columns; 0 disables clipping",
         "default": 0
+      },
+      "opencodeGoConsoleCookie": {
+        "type": "string",
+        "description": "opencode.ai console auth session cookie; enables exact OpenCode Go quota from the console page instead of the local estimate",
+        "secret": true
+      },
+      "opencodeGoWorkspace": {
+        "type": "string",
+        "description": "OpenCode workspace id (wrk_…) for the console quota source; discovered automatically when empty"
       }
     }
   },

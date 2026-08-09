@@ -5,7 +5,8 @@ export type UsageSourceId =
   | "omp-auth-storage"
   | "omp-broker"
   | "omp-response"
-  | "provider-endpoint";
+  | "provider-endpoint"
+  | "opencode-go-console";
 
 export interface LimitObservation {
   limit: UsageLimit;

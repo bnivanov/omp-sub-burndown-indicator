@@ -21,6 +21,7 @@ import { mergeSnapshots, SourceCoordinator } from "../sources/coordinator.ts";
 import { OmpAuthStorageUsageSource } from "../sources/omp-auth-storage.ts";
 import { OmpBrokerUsageSource } from "../sources/omp-broker.ts";
 import { discoverProviders } from "../sources/omp-models.ts";
+import { OpencodeGoConsoleUsageSource } from "../sources/opencode-go-console.ts";
 import {
   type ProviderEndpointCredential,
   ProviderEndpointUsageSource,
@@ -368,7 +369,10 @@ export class IndicatorController {
       timeoutMs: config.timeoutMs,
       staleAfterMs: config.staleAfterMs,
     });
-    return [authStorage, broker, response, endpoint];
+    const opencodeGoConsole = new OpencodeGoConsoleUsageSource(config, {
+      ...(this.#options.now ? { now: this.#options.now } : {}),
+    });
+    return [authStorage, broker, response, endpoint, opencodeGoConsole];
   }
 
   #setDiscoveredProviders(ctx: ExtensionContext): void {

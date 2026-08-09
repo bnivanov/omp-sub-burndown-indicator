@@ -24,6 +24,12 @@ export interface BurndownConfig {
   providerLabelMaxColumns: number;
   /** When set, only these provider IDs (lowercase) appear in the indicator. */
   providerFilter?: ReadonlySet<string>;
+  /**
+   * Explicit opt-in for exact OpenCode Go quota via the opencode.ai console:
+   * the user's `auth` session cookie, plus an optional `wrk_…` workspace id
+   * (discovered automatically when omitted).
+   */
+  opencodeGoConsole?: { cookie: string; workspace?: string };
   showReset: boolean;
   clockSkewMs: number;
 }
@@ -248,6 +254,27 @@ export function readConfig(
       )
     : undefined;
 
+  const consoleCookieRaw = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_OPENCODE_GO_CONSOLE_COOKIE",
+    "opencodeGoConsoleCookie",
+  );
+  const consoleCookie =
+    typeof consoleCookieRaw === "string" && consoleCookieRaw.trim() !== ""
+      ? consoleCookieRaw.trim()
+      : undefined;
+  const consoleWorkspaceRaw = settingOrEnv(
+    env,
+    pluginSettings,
+    "OMP_SUB_BURNDOWN_OPENCODE_GO_WORKSPACE",
+    "opencodeGoWorkspace",
+  );
+  const consoleWorkspace =
+    typeof consoleWorkspaceRaw === "string" && consoleWorkspaceRaw.trim() !== ""
+      ? consoleWorkspaceRaw.trim()
+      : undefined;
+
   const config: BurndownConfig = {
     refreshMs: refreshSeconds * 1_000,
     staleAfterMs: staleAfterSeconds * 1_000,
@@ -264,6 +291,14 @@ export function readConfig(
     showReset: booleanValue(env, "OMP_SUB_BURNDOWN_SHOW_RESET", true),
     clockSkewMs: clockSkewSeconds * 1_000,
     ...(providerFilter ? { providerFilter } : {}),
+    ...(consoleCookie
+      ? {
+          opencodeGoConsole: {
+            cookie: consoleCookie,
+            ...(consoleWorkspace ? { workspace: consoleWorkspace } : {}),
+          },
+        }
+      : {}),
   };
 
   if (brokerUrl && brokerToken) {
