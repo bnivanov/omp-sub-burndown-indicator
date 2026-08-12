@@ -84,14 +84,10 @@
         "description": "Maximum provider-label width in terminal columns; 0 disables clipping",
         "default": 0
       },
-      "opencodeGoConsoleCookie": {
+      "opencodeGoToken": {
         "type": "string",
-        "description": "opencode.ai console auth session cookie; enables exact OpenCode Go quota from the console page instead of the local estimate",
+        "description": "OpenCode Go API key; enables exact quota from the bearer-authenticated usage API",
         "secret": true
-      },
-      "opencodeGoWorkspace": {
-        "type": "string",
-        "description": "OpenCode workspace id (wrk_…) for the console quota source; discovered automatically when empty"
       }
     }
   },

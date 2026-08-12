@@ -20,10 +20,10 @@ function observationKey(observation: LimitObservation): string {
 }
 
 /**
- * Exact opencode-go console observations outrank OMP's synthetic
+ * Exact opencode-go usage observations outrank OMP's synthetic
  * `omp-observed-request-costs` estimate for the same provider — but only while
- * fresh. When the console session lapses and its data decays to stale, the
- * synthetic estimate takes over again instead of rendering a dead number.
+ * fresh. When exact data decays to stale, the synthetic estimate takes over
+ * again instead of rendering a dead number.
  */
 function applyConsolePrecedence(snapshots: SubscriptionSnapshot[]): SubscriptionSnapshot[] {
   const byProvider = new Map<string, SubscriptionSnapshot[]>();

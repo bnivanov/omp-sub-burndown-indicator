@@ -151,45 +151,29 @@ Each adapter also has an optional `OMP_SUB_BURNDOWN_<PROVIDER>_BASE_URL` variabl
 The initial matrix intentionally excludes public modules that do not provide an authoritative upstream subscription window for this feature:
 
 - MiniMax currently returns no usage report from its public adapter.
-- OpenCode Go derives spend from local observed request costs rather than an upstream subscription window; for exact quota see source 5 below.
 - xAI OAuth (Grok) exposes no subscription-window usage API; its rate-limit headers are static tier caps without reset data, so no authoritative window can be derived.
 - Ollama usage is not a subscription-window quota source.
 - Codex reset-credit data is not a usage window and is ignored.
 
-A direct report must expose a stable account, project, organization, or explicit non-secret account key. Multiple anonymous credentials for one provider are excluded rather than assigned by array order.
+### 5. OpenCode Go usage API (exact quota)
 
-### 5. OpenCode Go console session (exact quota)
+OpenCode Go's model gateway exposes the account's rolling 5-hour, weekly, and
+monthly limits through a bearer-authenticated JSON endpoint. Without this source,
+OpenCode Go quota is synthesized from OMP-observed request costs on this machine
+only, which under-reports spend made through other clients or machines. The API
+source replaces the synthetic estimate while its data is fresh; failed requests
+leave preserved data to decay to stale so the estimate takes over again.
 
-OpenCode Go's model gateway authenticates and enforces the rolling 5-hour,
-weekly, and monthly limits but never reports them: there is no usage endpoint
-and no rate-limit header for API-key clients. Without this source, OpenCode Go
-quota is synthesized from OMP-observed request costs on this machine only, which
-under-reports spend made through the opencode app, other CLI hosts, or other
-machines. The console source reads the exact server-side counters from the
-server-rendered page `https://opencode.ai/workspace/<id>/go` and replaces the
-synthetic estimate while its data is fresh; when the session lapses, the
-estimate takes over again and the console data decays to stale.
-
-Opt in with the console `auth` session cookie:
+Opt in with the same API key used by OpenCode Go:
 
 ```sh
-export OMP_SUB_BURNDOWN_OPENCODE_GO_CONSOLE_COOKIE="<auth cookie value>"
+export OMP_SUB_BURNDOWN_OPENCODE_GO_TOKEN="$OPENCODE_API_KEY"
 ```
 
-The workspace is discovered automatically from the `https://opencode.ai/auth`
-redirect. To pin one explicitly (for example with several workspaces):
-
-```sh
-export OMP_SUB_BURNDOWN_OPENCODE_GO_WORKSPACE="wrk_…"
-```
-
-Both are also accepted as the plugin settings `opencodeGoConsoleCookie` and
-`opencodeGoWorkspace`. The cookie is a long-lived console session credential;
-treat it like a password. It is sent only to `opencode.ai` and is never logged.
-To find its value, sign in to `https://opencode.ai` in a browser, then copy the
-`auth` cookie from the developer tools (Application → Cookies). Session
-expiry, page-structure changes, and network failures are reported under
-`/burndown status` as the `opencode-go-console` source diagnostic.
+The plugin setting `opencodeGoToken` accepts the same value. The key is sent
+only to `https://opencode.ai/zen/go/v1/usage` and is never logged. The source
+reports API-provided reset anchors and maps the fixed Go caps ($12 rolling,
+$30 weekly, $60 monthly) into the indicator's usage model.
 
 ## Configuration
 
@@ -202,8 +186,7 @@ expiry, page-structure changes, and network failures are reported under
 | `OMP_SUB_BURNDOWN_CLOCK_SKEW_SECONDS` | `30` | 0 through 300 |
 | `OMP_SUB_BURNDOWN_SYMBOLS` | `auto` | `auto`, `unicode`, or `ascii` |
 | `OMP_SUB_BURNDOWN_SHOW_RESET` | `true` | `true` or `false` |
-| `OMP_SUB_BURNDOWN_OPENCODE_GO_CONSOLE_COOKIE` | unset | console `auth` session cookie; enables the exact OpenCode Go source |
-| `OMP_SUB_BURNDOWN_OPENCODE_GO_WORKSPACE` | unset | `wrk_…` workspace id; skips automatic discovery |
+| `OMP_SUB_BURNDOWN_OPENCODE_GO_TOKEN` | unset | OpenCode Go API key; enables the exact usage source |
 
 The environment variables above configure refresh and source behavior. The display
 overrides below take precedence over the matching OMP plugin runtime setting without
@@ -211,7 +194,6 @@ rewriting it:
 
 | Variable | Default | Accepted values |
 | --- | ---: | --- |
-| `OMP_SUB_BURNDOWN_DENSITY` | `dense` | `dense` or `text` |
 | `OMP_SUB_BURNDOWN_WINDOW_VIEW` | `five_hour` | `five_hour`, `week`, `month`, or `all` |
 | `OMP_SUB_BURNDOWN_LAYOUT` | `fit` | `fit` or `wrap` |
 | `OMP_SUB_BURNDOWN_ACCOUNT_LABELS` | `full` | `full`, `masked`, or `provider-only` |
@@ -346,7 +328,7 @@ Exact placement is guaranteed only in interactive OMP.
 - No quota is estimated from chat token counts.
 - Usage operations are read-only, abortable, and single-flight through the runtime coordinator and OMP's usage cache.
 - Host credential values are never returned by the usage API. Explicit endpoint secrets are held only in process environment memory and are not persisted by the extension.
-- The optional OpenCode Go console cookie is read from the process environment or OMP's plugin settings, sent only to `opencode.ai`, and never written to logs or diagnostics.
+- The optional OpenCode Go API key is read from the process environment or OMP's secret plugin setting, sent only to `opencode.ai`, and never written to logs or diagnostics.
 - Stable account IDs use provider plus account/project/org scope. A response-only report uses a clearly provisional provider-only ID until one unique stronger identity is available. Tokens, API keys, credential hashes, mutable labels, and array positions are never IDs.
 - Different identified accounts are never merged merely because their provider matches.
 

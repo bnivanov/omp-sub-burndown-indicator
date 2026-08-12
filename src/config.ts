@@ -24,12 +24,8 @@ export interface BurndownConfig {
   providerLabelMaxColumns: number;
   /** When set, only these provider IDs (lowercase) appear in the indicator. */
   providerFilter?: ReadonlySet<string>;
-  /**
-   * Explicit opt-in for exact OpenCode Go quota via the opencode.ai console:
-   * the user's `auth` session cookie, plus an optional `wrk_…` workspace id
-   * (discovered automatically when omitted).
-   */
-  opencodeGoConsole?: { cookie: string; workspace?: string };
+  /** Explicit opt-in for exact OpenCode Go quota via its bearer API. */
+  opencodeGoConsole?: { token: string };
   showReset: boolean;
   clockSkewMs: number;
 }
@@ -254,25 +250,15 @@ export function readConfig(
       )
     : undefined;
 
-  const consoleCookieRaw = settingOrEnv(
+  const opencodeGoTokenRaw = settingOrEnv(
     env,
     pluginSettings,
-    "OMP_SUB_BURNDOWN_OPENCODE_GO_CONSOLE_COOKIE",
-    "opencodeGoConsoleCookie",
+    "OMP_SUB_BURNDOWN_OPENCODE_GO_TOKEN",
+    "opencodeGoToken",
   );
-  const consoleCookie =
-    typeof consoleCookieRaw === "string" && consoleCookieRaw.trim() !== ""
-      ? consoleCookieRaw.trim()
-      : undefined;
-  const consoleWorkspaceRaw = settingOrEnv(
-    env,
-    pluginSettings,
-    "OMP_SUB_BURNDOWN_OPENCODE_GO_WORKSPACE",
-    "opencodeGoWorkspace",
-  );
-  const consoleWorkspace =
-    typeof consoleWorkspaceRaw === "string" && consoleWorkspaceRaw.trim() !== ""
-      ? consoleWorkspaceRaw.trim()
+  const opencodeGoToken =
+    typeof opencodeGoTokenRaw === "string" && opencodeGoTokenRaw.trim() !== ""
+      ? opencodeGoTokenRaw.trim()
       : undefined;
 
   const config: BurndownConfig = {
@@ -291,14 +277,7 @@ export function readConfig(
     showReset: booleanValue(env, "OMP_SUB_BURNDOWN_SHOW_RESET", true),
     clockSkewMs: clockSkewSeconds * 1_000,
     ...(providerFilter ? { providerFilter } : {}),
-    ...(consoleCookie
-      ? {
-          opencodeGoConsole: {
-            cookie: consoleCookie,
-            ...(consoleWorkspace ? { workspace: consoleWorkspace } : {}),
-          },
-        }
-      : {}),
+    ...(opencodeGoToken ? { opencodeGoConsole: { token: opencodeGoToken } } : {}),
   };
 
   if (brokerUrl && brokerToken) {

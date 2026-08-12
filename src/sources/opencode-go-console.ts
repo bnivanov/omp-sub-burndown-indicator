@@ -1,23 +1,17 @@
 import type { UsageLimit } from "@oh-my-pi/pi-ai";
 import type { BurndownConfig } from "../config.ts";
-import type { LimitObservation, SourceDiagnostic, SubscriptionSnapshot } from "../domain/types.ts";
+import type { SourceDiagnostic, SubscriptionSnapshot } from "../domain/types.ts";
 import { type UsageSource, UsageSourceError } from "./source.ts";
 
 /**
- * Exact OpenCode Go quota read from the opencode.ai console.
+ * Exact OpenCode Go quota read from OpenCode's bearer-authenticated usage API.
  *
- * The Go model gateway (`/zen/go/v1/*`) authenticates and enforces the
- * rolling/weekly/monthly limits but never reports them: no usage endpoint, no
- * rate-limit headers. The only place the server-side counters surface is the
- * console page `https://opencode.ai/workspace/<id>/go`, which is
- * server-rendered — a plain authenticated GET returns the three usage bars.
- *
- * This source is explicit opt-in: it activates only when the user supplies
- * their console `auth` session cookie. When enabled and healthy, the
- * coordinator prefers these exact observations over OMP's synthetic
- * `omp-observed-request-costs` estimate for opencode-go; when the session
- * lapses or the fetch fails, preserved data decays to stale and the synthetic
- * estimate takes over again.
+ * The API reports the account's rolling, weekly, and monthly percentages and
+ * reset anchors. This source is explicit opt-in: it activates only when the
+ * user supplies the API key. When enabled and healthy, the coordinator
+ * prefers these exact observations over OMP's synthetic
+ * `omp-observed-request-costs` estimate for opencode-go; when the request fails,
+ * preserved data decays to stale and the synthetic estimate takes over again.
  */
 
 const PROVIDER = "opencode-go";
@@ -41,12 +35,8 @@ const CONSOLE_WINDOWS: readonly ConsoleWindow[] = [
 ];
 
 export interface OpencodeGoConsoleUsageSourceOptions {
-  cookie?: string;
-  /** Workspace id (`wrk_…`); when omitted, discovered via the /auth redirect. */
-  workspace?: string;
-  /** Override for tests; defaults to https://opencode.ai. */
+  token?: string;
   baseUrl?: string;
-  /** Override for tests. */
   fetchFn?: typeof fetch;
   timeoutMs?: number;
   staleAfterMs?: number;
@@ -56,70 +46,48 @@ export interface OpencodeGoConsoleUsageSourceOptions {
 type SourceConfig = Pick<BurndownConfig, "opencodeGoConsole" | "timeoutMs" | "staleAfterMs">;
 
 interface ParsedUsageItem {
-  label: string;
+  status: string;
   percent: number;
-  resetMs?: number;
+  resetsAt: number;
 }
 
-/** English reset countdowns: "4 days 3 hours", "9 hours 39 minutes", "52 minutes". */
-export function parseResetMs(text: string): number | undefined {
-  const match =
-    /resets in\s+(?:(\d+)\s+days?)?\s*(?:(\d+)\s+hours?)?\s*(?:(\d+)\s+minutes?)?\s*(?:(\d+)\s+seconds?)?/i.exec(
-      text,
-    );
-  if (!match) return undefined;
-  const days = match[1] === undefined ? 0 : Number(match[1]);
-  const hours = match[2] === undefined ? 0 : Number(match[2]);
-  const minutes = match[3] === undefined ? 0 : Number(match[3]);
-  const seconds = match[4] === undefined ? 0 : Number(match[4]);
-  const totalMs = days * DAY_MS + hours * HOUR_MS + minutes * 60_000 + seconds * 1_000;
-  return totalMs > 0 ? totalMs : undefined;
-}
-
-const USAGE_ITEM_PATTERN = /data-slot="usage-item"[\s\S]*?(?=data-slot="usage-item"|$)/g;
-const LABEL_PATTERN = /data-slot="usage-label">\s*([^<]+?)\s*<\/span>/;
-const VALUE_PATTERN = /data-slot="usage-value">\s*(\d{1,3})\s*%\s*<\/span>/;
-const RESET_PATTERN = /data-slot="reset-time">([\s\S]*?)<\/span>/;
-const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
-
-/**
- * Parse the SSR usage bars. Returns items in render order (rolling, weekly,
- * monthly); English labels are recognized when present but are not required —
- * the console renders the three bars in a fixed order in every locale.
- */
-export function parseGoConsoleHtml(html: string): ParsedUsageItem[] {
-  // Strip Solid hydration comment markers (`<!--$-->` / `<!--/-->`).
-  const clean = html.replace(/<!--\$-->|<!--\/|-->/g, "");
-  const items: ParsedUsageItem[] = [];
-  for (const block of clean.matchAll(USAGE_ITEM_PATTERN)) {
-    const text = block[0];
-    const value = VALUE_PATTERN.exec(text);
-    if (!value) continue;
-    const label = LABEL_PATTERN.exec(text)?.[1] ?? "";
-    const resetText = RESET_PATTERN.exec(text)?.[1];
-    const resetMs = resetText ? parseResetMs(resetText) : undefined;
-    items.push({
-      label,
-      percent: Number(value[1]),
-      ...(resetMs !== undefined ? { resetMs } : {}),
-    });
+export function parseGoConsoleUsage(value: unknown): ParsedUsageItem[] {
+  if (typeof value !== "object" || value === null || !("usage" in value)) {
+    throw new Error("missing usage");
   }
-  return items;
+  const usage = value.usage;
+  if (typeof usage !== "object" || usage === null) throw new Error("invalid usage");
+  const usageRecord = Object.fromEntries(Object.entries(usage));
+  return ["rolling", "weekly", "monthly"].map((key) => {
+    if (!(key in usageRecord)) throw new Error(`missing ${key} usage`);
+    const item = usageRecord[key];
+    if (typeof item !== "object" || item === null) throw new Error(`invalid ${key} usage`);
+    if (
+      !("status" in item) ||
+      typeof item.status !== "string" ||
+      !("percent" in item) ||
+      typeof item.percent !== "number" ||
+      !Number.isFinite(item.percent) ||
+      item.percent < 0 ||
+      item.percent > 100 ||
+      !("resetsAt" in item) ||
+      typeof item.resetsAt !== "string"
+    ) {
+      throw new Error(`invalid ${key} usage`);
+    }
+    const resetsAt = Date.parse(item.resetsAt);
+    if (!Number.isFinite(resetsAt)) throw new Error(`invalid ${key} reset`);
+    return { status: item.status, percent: item.percent, resetsAt };
+  });
 }
 
-function windowForItem(item: ParsedUsageItem, index: number): ConsoleWindow | undefined {
-  const normalized = item.label.toLocaleLowerCase();
-  const byLabel = CONSOLE_WINDOWS.find((entry) => normalized.startsWith(entry.key));
-  return byLabel ?? CONSOLE_WINDOWS[index];
-}
-
-function resolveStatus(usedFraction: number): NonNullable<UsageLimit["status"]> {
-  if (usedFraction >= 1) return "exhausted";
-  if (usedFraction >= 0.8) return "warning";
+function resolveStatus(item: ParsedUsageItem): NonNullable<UsageLimit["status"]> {
+  if (item.status === "exhausted" || item.percent >= 100) return "exhausted";
+  if (item.status === "warning" || item.percent >= 80) return "warning";
   return "ok";
 }
 
-function buildLimit(window: ConsoleWindow, item: ParsedUsageItem, now: number): UsageLimit {
+function buildLimit(window: ConsoleWindow, item: ParsedUsageItem): UsageLimit {
   const usedFraction = item.percent / 100;
   const used = Number((usedFraction * window.limitUsd).toFixed(6));
   return {
@@ -130,7 +98,7 @@ function buildLimit(window: ConsoleWindow, item: ParsedUsageItem, now: number): 
       id: window.limitId,
       label: window.label,
       durationMs: window.durationMs,
-      ...(item.resetMs !== undefined ? { resetsAt: now + item.resetMs } : {}),
+      resetsAt: item.resetsAt,
     },
     amount: {
       used,
@@ -140,7 +108,7 @@ function buildLimit(window: ConsoleWindow, item: ParsedUsageItem, now: number): 
       remainingFraction: Math.max(0, 1 - usedFraction),
       unit: "usd",
     },
-    status: resolveStatus(usedFraction),
+    status: resolveStatus(item),
   };
 }
 
@@ -150,17 +118,14 @@ function classifyStatus(status: number): UsageSourceError["category"] {
   if (status >= 500) return "server";
   return "network";
 }
-
 export class OpencodeGoConsoleUsageSource implements UsageSource {
   readonly id = "opencode-go-console" as const;
-  readonly #cookie: string | undefined;
-  readonly #workspaceOverride: string | undefined;
+  readonly #token: string | undefined;
   readonly #baseUrl: string;
   readonly #fetchFn: typeof fetch;
   readonly #timeoutMs: number;
   readonly #staleAfterMs: number;
   readonly #now: () => number;
-  #workspace: string | undefined;
   #lastGood: SubscriptionSnapshot[] = [];
   #inFlight: Promise<SubscriptionSnapshot[]> | undefined;
   #lastSuccessAt: number | undefined;
@@ -173,18 +138,16 @@ export class OpencodeGoConsoleUsageSource implements UsageSource {
   ) {
     const candidate = config as SourceConfig & OpencodeGoConsoleUsageSourceOptions;
     const direct = candidate.opencodeGoConsole;
-    this.#cookie = options.cookie ?? candidate.cookie ?? direct?.cookie;
-    this.#workspaceOverride = options.workspace ?? candidate.workspace ?? direct?.workspace;
+    this.#token = options.token ?? candidate.token ?? direct?.token;
     this.#baseUrl = (options.baseUrl ?? candidate.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.#fetchFn = options.fetchFn ?? candidate.fetchFn ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? candidate.timeoutMs ?? 15_000;
     this.#staleAfterMs = options.staleAfterMs ?? candidate.staleAfterMs ?? 1_800_000;
     this.#now = options.now ?? candidate.now ?? (() => Date.now());
-    this.#workspace = this.#workspaceOverride;
   }
 
   get enabled(): boolean {
-    return this.#cookie !== undefined && this.#cookie.length > 0;
+    return this.#token !== undefined && this.#token.length > 0;
   }
 
   refresh(signal: AbortSignal): Promise<SubscriptionSnapshot[]> {
@@ -203,7 +166,7 @@ export class OpencodeGoConsoleUsageSource implements UsageSource {
     if (this.#lastErrorAt !== undefined) diagnostic.lastErrorAt = this.#lastErrorAt;
     if (this.#lastErrorCategory !== undefined) {
       diagnostic.lastErrorCategory = this.#lastErrorCategory;
-      diagnostic.detail = `OpenCode Go console refresh failed (${this.#lastErrorCategory})`;
+      diagnostic.detail = `OpenCode Go usage API refresh failed (${this.#lastErrorCategory})`;
     }
     return diagnostic;
   }
@@ -216,12 +179,16 @@ export class OpencodeGoConsoleUsageSource implements UsageSource {
     );
     const signal = AbortSignal.any([callerSignal, timeoutController.signal]);
     try {
-      if (callerSignal.aborted) {
-        throw new UsageSourceError("aborted", "OpenCode Go console refresh aborted");
+      if (callerSignal.aborted)
+        throw new UsageSourceError("aborted", "OpenCode Go usage refresh aborted");
+      const response = await this.#get(signal);
+      if (response.status !== 200) {
+        throw new UsageSourceError(
+          classifyStatus(response.status),
+          `OpenCode Go usage API failed (status ${response.status})`,
+        );
       }
-      const workspace = await this.#resolveWorkspace(signal);
-      const html = await this.#fetchUsagePage(workspace, signal);
-      const snapshots = this.#parse(html, workspace);
+      const snapshots = this.#parse(await response.json());
       this.#lastGood = snapshots;
       this.#lastSuccessAt = this.#now();
       this.#lastErrorAt = undefined;
@@ -232,106 +199,44 @@ export class OpencodeGoConsoleUsageSource implements UsageSource {
       this.#lastErrorAt = this.#now();
       this.#lastErrorCategory = usageError.category;
       if (usageError.category === "aborted") throw usageError;
-      // Every failure cedes to the synthetic estimate once preserved data
-      // decays to stale; never fail the refresh cycle for this probe.
       return this.#preservedSnapshots();
     } finally {
       clearTimeout(timer);
     }
   }
 
-  async #get(url: string, signal: AbortSignal): Promise<Response> {
-    let response: Response;
+  async #get(signal: AbortSignal): Promise<Response> {
     try {
-      response = await this.#fetchFn(url, {
-        redirect: "manual",
+      return await this.#fetchFn(`${this.#baseUrl}/zen/go/v1/usage`, {
         signal,
-        headers: {
-          accept: "text/html",
-          cookie: `auth=${this.#cookie}`,
-        },
+        headers: { accept: "application/json", authorization: `Bearer ${this.#token}` },
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") throw error;
       if (signal.aborted) throw signal.reason ?? error;
       throw new UsageSourceError(
         "network",
-        `OpenCode Go console request failed: ${error instanceof Error ? error.message : error}`,
+        `OpenCode Go usage request failed: ${error instanceof Error ? error.message : error}`,
       );
     }
-    return response;
   }
 
-  async #resolveWorkspace(signal: AbortSignal): Promise<string> {
-    if (this.#workspace) return this.#workspace;
-    const response = await this.#get(`${this.#baseUrl}/auth`, signal);
-    const location = response.headers.get("location") ?? "";
-    if (location.includes("auth.opencode.ai") || location.includes("/authorize")) {
-      throw new UsageSourceError("auth", "OpenCode Go console session expired or invalid");
-    }
-    const workspace = /\/workspace\/(wrk_[A-Za-z0-9]+)/.exec(location)?.[1];
-    if (!workspace) {
-      throw new UsageSourceError(
-        "schema",
-        `OpenCode Go console workspace discovery failed (status ${response.status})`,
-      );
-    }
-    this.#workspace = workspace;
-    return workspace;
-  }
-
-  async #fetchUsagePage(workspace: string, signal: AbortSignal): Promise<string> {
-    const response = await this.#get(`${this.#baseUrl}/workspace/${workspace}/go`, signal);
-    if (response.status === 200) return response.text();
-    const location = response.headers.get("location") ?? "";
-    if (location.includes("auth.opencode.ai") || location.includes("/authorize")) {
-      this.#workspace = this.#workspaceOverride;
-      throw new UsageSourceError("auth", "OpenCode Go console session expired or invalid");
-    }
-    if (response.status >= 300 && response.status < 400) {
-      this.#workspace = this.#workspaceOverride;
-      throw new UsageSourceError(
-        "schema",
-        `OpenCode Go console page redirected unexpectedly (status ${response.status})`,
-      );
-    }
-    throw new UsageSourceError(
-      classifyStatus(response.status),
-      `OpenCode Go console page failed (status ${response.status})`,
-    );
-  }
-
-  #parse(html: string, workspace: string): SubscriptionSnapshot[] {
-    const items = parseGoConsoleHtml(html);
-    if (items.length !== CONSOLE_WINDOWS.length) {
-      throw new UsageSourceError(
-        "schema",
-        `OpenCode Go console parse failed (expected ${CONSOLE_WINDOWS.length} usage bars, got ${items.length}; page changed or no Go subscription?)`,
-      );
-    }
-    const now = this.#now();
-    const email = EMAIL_PATTERN.exec(html)?.[0];
-    const limits: LimitObservation[] = items.map((item, index) => {
-      const window = windowForItem(item, index);
+  #parse(payload: unknown): SubscriptionSnapshot[] {
+    const items = parseGoConsoleUsage(payload);
+    const limits = items.map((item, index) => {
+      const window = CONSOLE_WINDOWS[index];
       if (!window)
-        throw new UsageSourceError("schema", "OpenCode Go console window mapping failed");
+        throw new UsageSourceError("schema", `OpenCode Go usage window ${index} is missing`);
       return {
-        limit: buildLimit(window, item, now),
-        measurementSource: "opencode-go-console",
-        fetchedAt: now,
+        limit: buildLimit(window, item),
+        measurementSource: "opencode-go-console" as const,
+        fetchedAt: this.#now(),
         stale: false,
       };
     });
-    const id = `opencode-go:console:${workspace}`;
+    const id = "opencode-go:usage";
     return [
-      {
-        id,
-        provider: PROVIDER,
-        accountId: id,
-        ...(email ? { accountLabel: email } : {}),
-        identitySource: "opencode-go-console",
-        limits,
-      },
+      { id, provider: PROVIDER, accountId: id, identitySource: "opencode-go-console", limits },
     ];
   }
 
@@ -339,15 +244,11 @@ export class OpencodeGoConsoleUsageSource implements UsageSource {
     return this.#lastGood
       .map((snapshot) => {
         const limits = snapshot.limits
-          .filter((item) => this.#isWithinAge(item.fetchedAt))
+          .filter((item) => this.#now() - item.fetchedAt <= this.#staleAfterMs)
           .map((item) => ({ ...item, limit: structuredClone(item.limit), stale: true }));
         return limits.length > 0 ? { ...snapshot, limits } : undefined;
       })
       .filter((snapshot): snapshot is SubscriptionSnapshot => snapshot !== undefined);
-  }
-
-  #isWithinAge(fetchedAt: number): boolean {
-    return this.#now() - fetchedAt <= this.#staleAfterMs;
   }
 
   #toUsageError(
@@ -357,14 +258,14 @@ export class OpencodeGoConsoleUsageSource implements UsageSource {
   ): UsageSourceError {
     if (error instanceof UsageSourceError) return error;
     if (callerSignal.aborted)
-      return new UsageSourceError("aborted", "OpenCode Go console refresh aborted");
-    const category: UsageSourceError["category"] =
+      return new UsageSourceError("aborted", "OpenCode Go usage refresh aborted");
+    const category =
       timeoutSignal.aborted || (error instanceof DOMException && error.name === "TimeoutError")
         ? "timeout"
-        : "network";
+        : "schema";
     return new UsageSourceError(
       category,
-      `OpenCode Go console refresh failed (${category}): ${error instanceof Error ? error.message : error}`,
+      `OpenCode Go usage refresh failed (${category}): ${error instanceof Error ? error.message : error}`,
     );
   }
 }
